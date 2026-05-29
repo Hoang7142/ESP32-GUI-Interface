@@ -50,4 +50,3 @@ constexpr bool LORA_CRC_ON = true;
 
 constexpr uint16_t LORA_MAX_PACKET_LEN = 255;
 constexpr uint32_t LORA_TX_INTERVAL_MS = 1000;
-constexpr uint32_t LORA_RX_TIMEOUT_MS = 2000;

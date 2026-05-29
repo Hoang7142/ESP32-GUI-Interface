@@ -168,6 +168,10 @@ void printHex(const uint8_t* data, size_t len) {
 }
 
 void tryReceive() {
+  if (!loraRxPending()) {
+    return;
+  }
+
   uint8_t buffer[LORA_MAX_PACKET_LEN];
   int16_t rssi = 0;
   float snr = 0.0f;
@@ -221,7 +225,7 @@ void loop() {
 #endif
 
   static unsigned long lastMsg = 0;
-  if (millis() - lastMsg > 4000) {
+  if (millis() - lastMsg > 2000) {
     lastMsg = millis();
 
     // 🎲 Tạo số ngẫu nhiên dao động tự nhiên cho môi trường
@@ -272,9 +276,12 @@ void loop() {
 #endif
 
 #ifdef ENABLE_LORA
-  tryReceive();
-  tryTransmit();
+    tryTransmit();
 #endif
 
   }
+
+#ifdef ENABLE_LORA
+  tryReceive();
+#endif
 }
