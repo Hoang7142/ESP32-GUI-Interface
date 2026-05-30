@@ -9,7 +9,7 @@
 #endif
 #ifdef ENABLE_LORA
 #include "lora_radio.h"
-#include "lora_config.h"
+#include "lora_gateway.h"
 #endif
 
 #ifdef ENABLE_WIFI
@@ -70,8 +70,9 @@ void setup() {
 #endif
 
 #ifdef ENABLE_LORA
-  loraBegin();
-  Serial.println("LoRa initialized");
+  if (loraBegin()) {
+    initLoRaGateway();
+  }
 #endif
 }
 
@@ -154,68 +155,6 @@ void reconnect() {
 }
 #endif
 
-#ifdef ENABLE_LORA
-void printHex(const uint8_t* data, size_t len) {
-  for (size_t i = 0; i < len; i++) {
-    if (data[i] < 0x10) {
-      Serial.print('0');
-    }
-    Serial.print(data[i], HEX);
-    if (i + 1 < len) {
-      Serial.print(' ');
-    }
-  }
-}
-
-void tryReceive() {
-  if (!loraRxPending()) {
-    return;
-  }
-
-  uint8_t buffer[LORA_MAX_PACKET_LEN];
-  int16_t rssi = 0;
-  float snr = 0.0f;
-
-  int len = loraReceive(buffer, sizeof(buffer), &rssi, &snr);
-  if (len <= 0) {
-    return;
-  }
-
-  Serial.print(F("RX "));
-  Serial.print(len);
-  Serial.print(F(" bytes, RSSI "));
-  Serial.print(rssi);
-  Serial.print(F(" dBm, SNR "));
-  Serial.print(snr, 1);
-  Serial.print(F(" dB | ASCII: \""));
-  for (int i = 0; i < len; i++) {
-    char c = static_cast<char>(buffer[i]);
-    Serial.print((c >= 32 && c <= 126) ? c : '.');
-  }
-  Serial.print(F("\" | HEX: "));
-  printHex(buffer, static_cast<size_t>(len));
-  Serial.println();
-}
-#endif
-
-#ifdef ENABLE_LORA
-void tryTransmit() {
-  char message[64];
-  static uint32_t packetCounter = 0;
-  int msgLen = snprintf(message, sizeof(message), "ESP32 #%lu", packetCounter);
-  if (msgLen <= 0) {
-    return;
-  }
-
-  if (loraSend(reinterpret_cast<const uint8_t*>(message),
-               static_cast<size_t>(msgLen))) {
-    Serial.print(F("Sent: "));
-    Serial.println(message);
-    packetCounter++;
-  }
-}
-#endif
-  
 void loop() {
 #ifdef ENABLE_MQTT
   if (!client.connected()) {
@@ -271,17 +210,12 @@ void loop() {
     Serial.print("Da gui du lieu fake: ");
     Serial.println(buffer);
 #else
-    Serial.printf("soil=%.1f temp=%.1f humi=%.1f water=%.1f flow=%.1f amp=%.1f \r\n",
-                  soil, temp, humi, water, flow, current_amp);
+    // Serial.printf("soil=%.1f temp=%.1f humi=%.1f water=%.1f flow=%.1f amp=%.1f \r\n",
+    //               soil, temp, humi, water, flow, current_amp);
 #endif
 
 #ifdef ENABLE_LORA
-    tryTransmit();
+    loraGatewayPoll();
 #endif
-
   }
-
-#ifdef ENABLE_LORA
-  tryReceive();
-#endif
 }

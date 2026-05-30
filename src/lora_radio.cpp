@@ -1,3 +1,8 @@
+/**
+ * @file lora_radio.cpp
+ * @brief ESP32 SX1278 radio driver (RadioLib). Raw byte TX/RX only;
+ *        protocol handling is in lora_protocol / lora_gateway / lora_node.
+ */
 #include "lora_radio.h"
 
 #include <RadioLib.h>
@@ -10,11 +15,12 @@ namespace {
 SPIClass loraSpi(VSPI);
 SX1278 radio = new Module(LORA_NSS, LORA_DIO0, LORA_RST, RADIOLIB_NC, loraSpi);
 
-volatile bool rxFlag = false; // stand for received data is ready to be read
+volatile bool rxFlag = false; /**< Set by DIO0 ISR when RxDone fires. */
 
 constexpr uint16_t kIrqRxDone = RADIOLIB_SX127X_CLEAR_IRQ_FLAG_RX_DONE;
 
 #if defined(ESP8266) || defined(ESP32)
+/** @brief DIO0 interrupt handler: set rxFlag on RxDone only. */
 void IRAM_ATTR onPacketReceived() {
   // DIO0 is mapped to RxDone only while in RX; ignore any other IRQ source.
   if (radio.getIRQFlags() & kIrqRxDone) {
@@ -22,6 +28,7 @@ void IRAM_ATTR onPacketReceived() {
   }
 }
 #else
+/** @brief DIO0 interrupt handler: set rxFlag on RxDone only. */
 void onPacketReceived() {
   if (radio.getIRQFlags() & kIrqRxDone) {
     rxFlag = true;
@@ -29,10 +36,13 @@ void onPacketReceived() {
 }
 #endif
 
+/** @brief Register onPacketReceived() on DIO0. */
 void attachRxInterrupt() { radio.setPacketReceivedAction(onPacketReceived); }
 
+/** @brief Unregister DIO0 interrupt (required before TX). */
 void detachRxInterrupt() { radio.clearPacketReceivedAction(); }
 
+/** @brief Convert a RadioLib error code to a human-readable string. */
 const char* stateToString(int16_t state) {
   switch (state) {
     case RADIOLIB_ERR_NONE:
@@ -52,6 +62,7 @@ const char* stateToString(int16_t state) {
   }
 }
 
+/** @brief Log a failed RadioLib call to Serial. */
 void logState(const char* action, int16_t state) {
   Serial.print(action);
   Serial.print(F(" failed, code "));
@@ -61,6 +72,7 @@ void logState(const char* action, int16_t state) {
   Serial.println(')');
 }
 
+/** @brief Put the SX1278 into continuous receive mode. */
 bool startRx() {
   int16_t state = radio.startReceive();
   if (state != RADIOLIB_ERR_NONE) {
@@ -72,6 +84,7 @@ bool startRx() {
 
 }  // namespace
 
+/** @brief See loraBegin() in lora_radio.h. */
 bool loraBegin() {
   loraSpi.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_NSS);
 
@@ -124,6 +137,7 @@ bool loraBegin() {
   return true;
 }
 
+/** @brief See loraSend() in lora_radio.h. */
 bool loraSend(const uint8_t* data, size_t len) {
   if (data == nullptr || len == 0 || len > LORA_MAX_PACKET_LEN) {
     Serial.println(F("Invalid TX payload"));
@@ -160,11 +174,11 @@ bool loraSend(const uint8_t* data, size_t len) {
   return true;
 }
 
-// check if there is any received data waiting to be read
+/** @brief See loraRxPending() in lora_radio.h. */
 bool loraRxPending() { return rxFlag; }
 
+/** @brief See loraReceive() in lora_radio.h. */
 int loraReceive(uint8_t* data, size_t maxLen, int16_t* rssiOut, float* snrOut) {
-  // check if there is any received data waiting to be read
   if (!rxFlag) {
     return 0;
   }
@@ -206,6 +220,7 @@ int loraReceive(uint8_t* data, size_t maxLen, int16_t* rssiOut, float* snrOut) {
   return static_cast<int>(length);
 }
 
+/** @brief See loraPrintChipStatus() in lora_radio.h. */
 void loraPrintChipStatus() {
   Serial.println(F("  Chip: SX1278"));
   Serial.print(F("  RX: DIO0 = RxDone, GPIO "));
