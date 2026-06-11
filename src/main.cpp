@@ -1,248 +1,55 @@
-// // #include <SPI.h>
-// // #include <LoRa.h>
 
-// // // Chot cac chan theo bang tren
-// // #define SCK     18
-// // #define MISO    19
-// // #define MOSI    23
-// // #define SS      5
-// // #define RST     14
-// // #define DIO0    2
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#include <Arduino.h>
+// Uncomment to enable each feature at compile time
+#define ENABLE_WIFI
+#define ENABLE_MQTT
+//#define ENABLE_LORA
 
-// // void setup() {
-// //   // Khoi tao Serial de debug
-// //   Serial.begin(115200);
-// //   while (!Serial);
+#if defined(ENABLE_MQTT) && !defined(ENABLE_WIFI)
+#error "ENABLE_MQTT requires ENABLE_WIFI"
+#endif
+#ifdef ENABLE_LORA
+#include "lora_radio.h"
+#include "lora_config.h"
+#endif
 
-// //   Serial.println("--- DANG KHOI TAO LORA ---");
-
-// //   // 1. Khoi tao giao tiep SPI
-// //   SPI.begin(SCK, MISO, MOSI, SS);
-
-// //   // 2. Gan cac chan cho thu vien LoRa
-// //   LoRa.setPins(SS, RST, DIO0);
-
-// //   // 3. Bat dau khoi tao module o tan so 433MHz
-// //   // Neu dung module 433MHz thi de 433E6, neu 915MHz thi de 915E6
-// //   if (!LoRa.begin(433E6)) {
-// //     Serial.println("KHOI TAO THAT BAI!");
-// //     while (1); 
-// //   }
-
-// //   // 4. Tuy chinh (Optional)
-// //   LoRa.setSyncWord(0xF1); // Dat ma dong bo trung voi STM32
-  
-// //   Serial.println("KHOI TAO THANH CONG!");
-// //   Serial.println("Dang cho tin hieu...");
-// // }
-
-// // void loop() {
-// //   // Kiem tra goi tin den
-// //   int packetSize = LoRa.parsePacket();
-// //   if (packetSize) {
-// //     Serial.print("Nhan duoc: ");
-// //     while (LoRa.available()) {
-// //       Serial.print((char)LoRa.read());
-// //     }
-// //     Serial.print(" | RSSI: ");
-// //     Serial.println(LoRa.packetRssi());
-// //   }
-// // }
-
-// #include <SPI.h>
-// #include <LoRa.h>
-
-// // ===== PIN CONFIG =====
-// #define SCK     18
-// #define MISO    19
-// #define MOSI    23
-// #define SS      5
-// #define RST     14
-// #define DIO0    2
-
-// // 👉 Pin debug để bắt timing trên logic analyzer
-// #define DEBUG_PIN 4
-
-// void setup() {
-//   Serial.begin(115200);
-//   while (!Serial);
-
-//   Serial.println("\n--- DANG KHOI TAO LORA ---");
-
-//   pinMode(DEBUG_PIN, OUTPUT);
-//   digitalWrite(DEBUG_PIN, LOW);
-
-//   // ===== SPI INIT =====
-//   SPI.begin(SCK, MISO, MOSI, SS);
-
-//   // ===== LORA CONFIG =====
-//   LoRa.setPins(SS, RST, DIO0);
-
-//   // 🔥 QUAN TRỌNG: giảm tốc độ SPI để đo được clock
-//   LoRa.setSPIFrequency(100000);   // 100kHz
-//   // Nếu vẫn khó đo → đổi thành: 10000
-
-//   // ===== INIT LORA =====
-//   if (!LoRa.begin(433E6)) {
-//     Serial.println("KHOI TAO THAT BAI!");
-//     while (1);
-//   }
-
-//   LoRa.setSyncWord(0xF1);
-
-//   Serial.println("KHOI TAO THANH CONG!");
-//   Serial.println("Dang cho tin hieu...");
-// }
-
-// void loop() {
-
-//   // 🔥 Bật debug pin → báo bắt đầu SPI
-//   digitalWrite(DEBUG_PIN, HIGH);
-
-//   int packetSize = LoRa.parsePacket();
-
-//   // 🔥 Tắt debug pin → kết thúc SPI
-//   digitalWrite(DEBUG_PIN, LOW);
-
-//   if (packetSize) {
-//     Serial.print("Nhan duoc: ");
-
-//     while (LoRa.available()) {
-//       Serial.print((char)LoRa.read());
-//     }
-
-//     Serial.print(" | RSSI: ");
-//     Serial.println(LoRa.packetRssi());
-//   }
-
-//   delay(10); // giúp analyzer dễ bắt hơn
-// }
-////////////////////////////////////////////////////////
-
-// #include <WiFi.h>
-// #include <PubSubClient.h>
-// #include <ArduinoJson.h>
-// #include <WiFiClientSecure.h>
-
-// // Prototype
-// void setup_wifi();
-// void reconnect();
-
-// // --- Cấu hình WiFi ---
-// const char* ssid = "HOANGDIN";
-// const char* password = "123456789";
-
-// // --- MQTT ---
-// const char* mqtt_server = "364b003ce9c44c90a68e7930b601f369.s1.eu.hivemq.cloud";
-// const int mqtt_port = 8883;
-// const char* mqtt_user = "dth7142_db_user";
-// const char* mqtt_pass = "Hoang2410@";
-
-// WiFiClientSecure espClient;
-// PubSubClient client(espClient);
-
-// void setup() {
-//   Serial.begin(115200);
-
-//   setup_wifi();
-
-//   espClient.setInsecure();
-
-//   client.setServer(mqtt_server, mqtt_port);
-// }
-
-// void setup_wifi() {
-//   delay(10);
-
-//   Serial.println("Dang ket noi WiFi...");
-
-//   WiFi.begin(ssid, password);
-
-//   while (WiFi.status() != WL_CONNECTED) {
-//     delay(500);
-//     Serial.print(".");
-//   }
-
-//   Serial.println("\nWiFi Connected!");
-// }
-
-// void reconnect() {
-//   while (!client.connected()) {
-
-//     Serial.println("Dang ket noi MQTT...");
-
-//     if (client.connect("ESP32_Gateway", mqtt_user, mqtt_pass)) {
-
-//       Serial.println("MQTT Connected!");
-
-//     } else {
-
-//       Serial.print("Failed, rc=");
-//       Serial.println(client.state());
-
-//       delay(5000);
-//     }
-//   }
-// }
-
-// void loop() {
-
-//   if (!client.connected()) {
-//     reconnect();
-//   }
-
-//   client.loop();
-
-//   static unsigned long lastMsg = 0;
-
-//   if (millis() - lastMsg > 5000) {
-
-//     lastMsg = millis();
-
-//     float soil = random(400, 700) / 10.0;
-//     float temp = random(250, 350) / 10.0;
-//     float humi = random(600, 900) / 10.0;
-//     float water = random(50, 100);
-//     float flow = random(0, 20) / 10.0;
-
-//     JsonDocument doc;
-
-//     doc["soil"] = soil;
-//     doc["temp"] = temp;
-//     doc["humi"] = humi;
-//     doc["water"] = water;
-//     doc["flow"] = flow;
-
-//     char buffer[256];
-
-//     serializeJson(doc, buffer);
-
-//     client.publish("smartfarm/sensors", buffer);
-
-//     Serial.print("Da gui du lieu fake: ");
-//     Serial.println(buffer);
-//   }
-// }
-///////////////////////////////////////
+#ifdef ENABLE_WIFI
 #include <WiFi.h>
+#endif
+
+#ifdef ENABLE_MQTT
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <WiFiClientSecure.h>
+#endif
 
-// Prototype
+// Prototypes
+#ifdef ENABLE_WIFI
 void setup_wifi();
+#endif
+
+#ifdef ENABLE_MQTT
 void reconnect();
 void callback(char* topic, byte* payload, unsigned int length);
+#endif
 
+#ifdef ENABLE_WIFI
 // --- Cấu hình WiFi ---
 const char* ssid = "HOANGDIN";
 const char* password = "123456789";
+#endif
 
+#ifdef ENABLE_MQTT
 // --- MQTT ---
 const char* mqtt_server = "364b003ce9c44c90a68e7930b601f369.s1.eu.hivemq.cloud";
 const int mqtt_port = 8883;
 const char* mqtt_user = "dth7142_db_user";
 const char* mqtt_pass = "Hoang2410@";
+
+WiFiClientSecure espClient;
+PubSubClient client(espClient);
+#endif
 
 // 🔹 BIẾN LƯU TRẠNG THÁI GIẢ LẬP ĐỂ ĐỒNG BỘ VỚI CÁC THANH TRƯỢT PWM VÀ NÚT BẤM
 int fakePumpStatus = 0;
@@ -251,19 +58,26 @@ int fakeRoofPwm = 100;
 String fakeRoofStatus = "STOP";
 String fakeSystemMode = "manual";
 
-WiFiClientSecure espClient;//bao mat
-PubSubClient client(espClient);// giao thuc mqtt
-
 void setup() {
   Serial.begin(115200);
+
+#ifdef ENABLE_WIFI
   setup_wifi();
-  espClient.setInsecure();//boqua buoc kiem tra bao mat
+#endif
+
+#ifdef ENABLE_MQTT
+  espClient.setInsecure();
   client.setServer(mqtt_server, mqtt_port);
-  
-  // 🔹 Đăng ký hàm callback nhận lệnh điều khiển
   client.setCallback(callback);
+#endif
+
+#ifdef ENABLE_LORA
+  loraBegin();
+  Serial.println("LoRa initialized");
+#endif
 }
 
+#ifdef ENABLE_WIFI
 void setup_wifi() {
   delay(10);
   Serial.println("Dang ket noi WiFi...");
@@ -274,7 +88,9 @@ void setup_wifi() {
   }
   Serial.println("\nWiFi Connected!");
 }
+#endif
 
+#ifdef ENABLE_MQTT
 // 🔹 HÀM HỨNG LỆNH ĐIỀU KHIỂN TỪ WEB VÀ PHẢN HỒI FEEDBACK TỨC THÌ
 void callback(char* topic, byte* payload, unsigned int length) {
   Serial.print("📥 Nhan lenh tu topic: ");
@@ -338,12 +154,73 @@ void reconnect() {
     }
   }
 }
+#endif
 
+#ifdef ENABLE_LORA
+void printHex(const uint8_t* data, size_t len) {
+  for (size_t i = 0; i < len; i++) {
+    if (data[i] < 0x10) {
+      Serial.print('0');
+    }
+    Serial.print(data[i], HEX);
+    if (i + 1 < len) {
+      Serial.print(' ');
+    }
+  }
+}
+
+void tryReceive() {
+  uint8_t buffer[LORA_MAX_PACKET_LEN];
+  int16_t rssi = 0;
+  float snr = 0.0f;
+
+  int len = loraReceive(buffer, sizeof(buffer), &rssi, &snr);
+  if (len <= 0) {
+    return;
+  }
+
+  Serial.print(F("RX "));
+  Serial.print(len);
+  Serial.print(F(" bytes, RSSI "));
+  Serial.print(rssi);
+  Serial.print(F(" dBm, SNR "));
+  Serial.print(snr, 1);
+  Serial.print(F(" dB | ASCII: \""));
+  for (int i = 0; i < len; i++) {
+    char c = static_cast<char>(buffer[i]);
+    Serial.print((c >= 32 && c <= 126) ? c : '.');
+  }
+  Serial.print(F("\" | HEX: "));
+  printHex(buffer, static_cast<size_t>(len));
+  Serial.println();
+}
+#endif
+
+#ifdef ENABLE_LORA
+void tryTransmit() {
+  char message[64];
+  static uint32_t packetCounter = 0;
+  int msgLen = snprintf(message, sizeof(message), "ESP32 #%lu", packetCounter);
+  if (msgLen <= 0) {
+    return;
+  }
+
+  if (loraSend(reinterpret_cast<const uint8_t*>(message),
+               static_cast<size_t>(msgLen))) {
+    Serial.print(F("Sent: "));
+    Serial.println(message);
+    packetCounter++;
+  }
+}
+#endif
+  
 void loop() {
+#ifdef ENABLE_MQTT
   if (!client.connected()) {
     reconnect();
   }
   client.loop();
+#endif
 
   static unsigned long lastMsg = 0;
   if (millis() - lastMsg > 4000) {
@@ -354,24 +231,25 @@ void loop() {
     float temp = random(290, 340) / 10.0;
     float humi = random(650, 850) / 10.0;
     float water = random(700, 850) / 10.0;
-    
+
     float current_amp = 0.0;
     float flow = 0.0;
 
     // Logic tính toán dòng điện và lưu lượng phụ thuộc hoàn toàn vào trạng thái nút Bơm trên Web
     if (fakePumpStatus == 1) {
       // Dòng và lưu lượng tính toán tỷ lệ thuận theo thanh trượt PWM máy bơm trên Web
-      flow = (random(120, 150) / 10.0) * (fakePumpPwm / 100.0);
-      current_amp = (random(14, 20) / 10.0) * (fakePumpPwm / 100.0); // Dòng bình thường ~ 1.5A
+      //flow = (random(120, 150) / 10.0) * (fakePumpPwm / 100.0);
+      //current_amp = (random(14, 20) / 10.0) * (fakePumpPwm / 100.0); // Dòng bình thường ~ 1.5A
 
       // 🧠 THỬ NGHIỆM KỊCH BẢN CHẨN ĐOÁN LỖI KHẨN CẤP TRÊN WEB GUI
       // Để test Hộp chẩn đoán đổi sang màu ĐỎ (Kẹt Motor quá dòng), mở gạch chéo 2 dòng dưới:
-      // current_amp = 3.6; flow = 0.0;
-
+      //  current_amp = 3.6; flow = 0.0;
+      //  flow = 0.0;
       // Để test Hộp chẩn đoán đổi sang màu CAM (Hụt nước/Nghẹt ống), mở gạch chéo 2 dòng dưới:
-      // current_amp = 1.5; flow = 0.0;
+       current_amp = 1.5; flow = 0.0;
     }
 
+#ifdef ENABLE_MQTT
     JsonDocument doc;
     doc["soil"] = soil;
     doc["temp"] = temp;
@@ -379,7 +257,7 @@ void loop() {
     doc["water"] = water;
     doc["flow"] = flow;
     doc["current_amp"] = current_amp;
-    doc["mua"] = 0; // 0: không mưa, 1: có mưa
+    doc["mua"] = 1; // 0: không mưa, 1: có mưa
     doc["mode"] = fakeSystemMode;
     doc["pumpPwm"] = fakePumpPwm;
     doc["roofPwm"] = fakeRoofPwm;
@@ -390,6 +268,15 @@ void loop() {
 
     Serial.print("Da gui du lieu fake: ");
     Serial.println(buffer);
+#else
+    Serial.printf("soil=%.1f temp=%.1f humi=%.1f water=%.1f flow=%.1f amp=%.1f \r\n",
+                  soil, temp, humi, water, flow, current_amp);
+#endif
+
+#ifdef ENABLE_LORA
+  tryReceive();
+  tryTransmit();
+#endif
+
   }
 }
-
