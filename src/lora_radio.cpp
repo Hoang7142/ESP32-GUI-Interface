@@ -4,7 +4,9 @@
 #include <SPI.h>
 
 #include "lora_config.h"
+#include "lora_network_config.h"
 
+// 
 namespace {
 
 SPIClass loraSpi(VSPI);//Tạo ra một đối tượng đường truyền SPI mới tên là loraSpi dựa trên khối phần cứng VSPI có sẵn trong chip ESP32 để kết nối chuyên biệt với module LoRa.
@@ -48,7 +50,7 @@ void logState(const char* action, int16_t state) {//Hàm in thông báo lỗi ra
 
 }  // namespace
 
-bool loraBegin() {
+bool loraBegin() {//Hàm này là cầu nối giúp ESP32 "nói chuyện" được với chip SX1278 thông qua thư viện RadioLib.
   loraSpi.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_NSS);
 
   int16_t state = radio.begin(
@@ -59,7 +61,7 @@ bool loraBegin() {
     return false;
   }
 
-  state = radio.setCRC(LORA_CRC_ON);
+  state = radio.setCRC(LORA_CRC_ON);//ật tính năng kiểm tra lỗi CRC bằng phần cứng của chip SX1278. Gói tin nào bị méo dạng trên đường bay do nhiễu, chip sẽ tự động phát hiện.
   if (state != RADIOLIB_ERR_NONE) {
     logState("radio.setCRC", state);
     return false;
@@ -93,7 +95,7 @@ bool loraBegin() {
   return true;
 }
 
-bool loraSend(const uint8_t* data, size_t len) {
+bool loraSend(const uint8_t* data, size_t len) {//Hàm phát sóng LoRa
   if (data == nullptr || len == 0 || len > LORA_MAX_PACKET_LEN) {
     Serial.println(F("Invalid TX payload"));
     return false;
@@ -104,22 +106,24 @@ bool loraSend(const uint8_t* data, size_t len) {
     logState("radio.transmit", state);
     return false;
   }
-
+//Ép kiểu mảng byte thành dạng đọc/ghi và ra lệnh cho chip SX1278 đẩy toàn bộ mảng byte này lên antenna để phát vào không trung. Hàm này sẽ chặn CPU một vài mili-giây cho đến khi sóng phát xong hoàn toàn.
   Serial.print(F("TX OK ("));
   Serial.print(len);
   Serial.println(F(" bytes)"));
   return true;
 }
 
-int loraReceive(uint8_t* data, size_t maxLen, int16_t* rssiOut, float* snrOut) {
+int loraReceive(uint8_t* data, size_t maxLen, int16_t* rssiOut, float* snrOut) {// hàm nhận sóng
   if (data == nullptr || maxLen == 0) {
     return -1;
   }
 
-  int16_t state = radio.receive(data, maxLen, LORA_RX_TIMEOUT_MS);
+// Sửa lại thành thế này:
+int16_t state = radio.receive(data, maxLen, LORA_RESPONSE_TIMEOUT_MS);// getway cho nhan song tam 2s
+
   if (state == RADIOLIB_ERR_RX_TIMEOUT) {
     return 0;
-  }
+  }//Nếu hết 2 giây mà không có Node nào thưa chuyện, nó sẽ trả về 0 (Báo hiệu: Hết giờ, không có hàng về).
   if (state < 0) {
     logState("radio.receive", state);
     return -1;
@@ -131,7 +135,7 @@ int loraReceive(uint8_t* data, size_t maxLen, int16_t* rssiOut, float* snrOut) {
   if (snrOut != nullptr) {
     *snrOut = radio.getSNR();
   }
-
+//Nếu nhận thành công, nó lôi tiếp thông số getRSSI() (Độ mạnh tín hiệu) và getSNR() (Độ sạch của tín hiệu chống nhiễu) để lưu lại cho việc chẩn đoán đường truyền.
   return state;
 }
 

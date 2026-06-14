@@ -1,6 +1,8 @@
 #pragma once
 
 #include <Arduino.h>
+#include <stdint.h>
+#include <stddef.h>
 
 bool loraBegin();
 bool loraSend(const uint8_t* data, size_t len);
