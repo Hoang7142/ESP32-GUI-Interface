@@ -1,15 +1,23 @@
 #include <Arduino.h>
-// Uncomment to enable each feature at compile time
-// #define ENABLE_WIFI
-// #define ENABLE_MQTT
+
+// 🔹 BẬT CÁC TÍNH NĂNG MẠNG THẬT CHẠY MÔ HÌNH THỰC TẾ
+#define ENABLE_WIFI
+#define ENABLE_MQTT
 #define ENABLE_LORA
 
 #if defined(ENABLE_MQTT) && !defined(ENABLE_WIFI)
 #error "ENABLE_MQTT requires ENABLE_WIFI"
 #endif
+
 #ifdef ENABLE_LORA
-#include "lora_radio.h"
-#include "lora_gateway.h"
+// Sử dụng extern "C" để liên kết ngôn ngữ vì driver mạng trung gian viết bằng C chuẩn
+extern "C" {
+  #include "lora_radio.h"
+  #include "lora_config.h"
+  #include "lora_protocol.h"        // File giao thức chứa cấu trúc 7 cảm biến và nút bấm của bạn
+  #include "lora_network_config.h"  // File ID cấu hình chung mạng LoRa
+  #include "lora_gateway.h"         // File điều phối quét mạng ngầm tự động
+}
 #endif
 
 #ifdef ENABLE_WIFI
@@ -33,13 +41,13 @@ void callback(char* topic, byte* payload, unsigned int length);
 #endif
 
 #ifdef ENABLE_WIFI
-// --- Cấu hình WiFi ---
+// --- Cấu hình mạng WiFi ---
 const char* ssid = "HOANGDIN";
 const char* password = "123456789";
 #endif
 
 #ifdef ENABLE_MQTT
-// --- MQTT ---
+// --- MQTT Broker HiveMQ ---
 const char* mqtt_server = "364b003ce9c44c90a68e7930b601f369.s1.eu.hivemq.cloud";
 const int mqtt_port = 8883;
 const char* mqtt_user = "dth7142_db_user";
@@ -49,7 +57,14 @@ WiFiClientSecure espClient;
 PubSubClient client(espClient);
 #endif
 
-// 🔹 BIẾN LƯU TRẠNG THÁI GIẢ LẬP ĐỂ ĐỒNG BỘ VỚI CÁC THANH TRƯỢT PWM VÀ NÚT BẤM
+// Cờ báo hiệu có lệnh điều khiển mới từ MQTT đang chờ được gửi đi
+volatile bool g_mqtt_cmd_pending = false;
+// Biến lưu tạm cấu trúc lệnh nút nhấn từ Web
+lora_control_payload_t g_pending_control_data;
+// Biến lưu ID của Node cần điều khiển (nếu hệ thống của bạn có nhiều Node)
+uint8_t g_pending_target_node = 0x11;
+
+// Biến lưu trạng thái đồng bộ thực tế với các thanh trượt PWM và nút bấm Web GUI
 int fakePumpStatus = 0;
 int fakePumpPwm = 100;
 int fakeRoofPwm = 100;
@@ -70,8 +85,17 @@ void setup() {
 #endif
 
 #ifdef ENABLE_LORA
+  // 1. Khởi động driver thu phát LoRa chế độ ngắt chân DIO0 nhạy sóng của đồng nghiệp
   if (loraBegin()) {
-    initLoRaGateway();
+    Serial.println("Driver LoRa phần cứng ready!");
+    // 2. Kích hoạt cỗ máy Scheduler quét mạng tự động ONLINE/OFFLINE của đồng nghiệp
+    if (initLoRaGateway()) {
+      Serial.println("Cỗ máy Scheduler quét mạng tự động đã khởi tạo!");
+    } else {
+      Serial.println("Khởi động Scheduler quét mạng THẤT BẠI!");
+    }
+  } else {
+    Serial.println("Khởi động driver LoRa phần cứng THẤT BẠI!");
   }
 #endif
 }
@@ -88,54 +112,72 @@ void setup_wifi() {
   Serial.println("\nWiFi Connected!");
 }
 #endif
-
 #ifdef ENABLE_MQTT
-// 🔹 HÀM HỨNG LỆNH ĐIỀU KHIỂN TỪ WEB VÀ PHẢN HỒI FEEDBACK TỨC THÌ
+// 🔹 100% TINH TÚY ĐIỀU KHIỂN CỦA BẠN: Hứng lệnh mạng MQTT và đưa vào hàng đợi an toàn
 void callback(char* topic, byte* payload, unsigned int length) {
   Serial.print("📥 Nhan lenh tu topic: ");
   Serial.println(topic);
 
-  JsonDocument doc;//tao ra bo dem de chuan bi giai ma JSON
-  deserializeJson(doc, payload, length);//ra goi du lieu->bien doc
+  JsonDocument doc;
+  deserializeJson(doc, payload, length);
 
   JsonDocument feedbackDoc;
-  char feedbackBuffer[128];
-// chuan bi mot goi JAOn moi de phan hoi len web(da doc)//
 
-  // 1. Lệnh Bật/Tắt máy bơm
   if (doc["device"] == "pump") {
     fakePumpStatus = doc["state"];
     feedbackDoc["pump"] = fakePumpStatus;
     Serial.println(fakePumpStatus == 1 ? "-> BOM: BAT" : "-> BOM: TAT");
   }
-  // 2. Lệnh kéo thanh trượt PWM Bơm (PB1)
   else if (doc["device"] == "pump_pwm") {
     fakePumpPwm = doc["val"];
     Serial.printf("-> PWM BOM: %d%%\n", fakePumpPwm);
   }
-  // 3. Lệnh cụm 3 nút mái che
   else if (doc["device"] == "roof") {
     String action = doc["action"].as<String>();
     fakeRoofStatus = action;
     feedbackDoc["roof"] = fakeRoofStatus;
     Serial.println("-> MAI CHE: " + fakeRoofStatus);
   }
-  // 4. Lệnh kéo thanh trượt PWM Mái che (PA8)
   else if (doc["device"] == "roof_pwm") {
     fakeRoofPwm = doc["val"];
     Serial.printf("-> PWM MAI CHE: %d%%\n", fakeRoofPwm);
   }
-  // 5. Lệnh chuyển chế độ hệ thống
   else if (doc["device"] == "system") {
     fakeSystemMode = doc["mode"].as<String>();
     Serial.println("-> CHE DO: " + fakeSystemMode);
   }
 
-  // Gửi feedback ngược lại cho server.js xác nhận trạng thái nút bấm
-  if (feedbackDoc.size() > 0) {
-    serializeJson(feedbackDoc, feedbackBuffer);
-    client.publish("smartfarm/feedback", feedbackBuffer);
+  // 🔹 TẮT ĐOẠN PHÁT MQTT TẠM THỜI Ở ĐÂY ĐỂ CHỐNG NHÁY WEB (THEO ĐÚNG CHỈ DẪN)
+  // if (feedbackDoc.size() > 0) {
+  //   String feedbackBuffer;
+  //   serializeJson(feedbackDoc, feedbackBuffer);
+  //   client.publish("smartfarm/feedback", feedbackBuffer.c_str());
+  // }
+
+#ifdef ENABLE_LORA
+  // BÓC TÁCH NODE_ID ĐỘNG TỪ WEB (Hỗ trợ điều khiển chính xác Node 0x11, 0x12, 0x13)
+  uint8_t target_node = doc["node_id"] | 0x11;
+  if (target_node != 0x11 && target_node != 0x12 && target_node != 0x13) {
+    Serial.printf(" [Cảnh báo] Node ID 0x%02X không thuộc hệ thống!\n", target_node);
+    return;
   }
+
+  // ĐÓNG GÓI LỆNH ĐIỀU KHIỂN NÚT NHẤN VÀO HÀNG ĐỢI (CHỜ LUỒNG LOOP PHÁT AN TOÀN)
+  g_pending_control_data.pump_status = (fakePumpStatus == 1) ? 1 : 0;
+  g_pending_control_data.pump_pwm    = (uint8_t)fakePumpPwm;
+
+  if (fakeRoofStatus == "OPEN")       g_pending_control_data.roof_status = 1;
+  else if (fakeRoofStatus == "CLOSE") g_pending_control_data.roof_status = 2;
+  else                                g_pending_control_data.roof_status = 0; 
+  g_pending_control_data.roof_pwm    = (uint8_t)fakeRoofPwm;
+
+  g_pending_control_data.system_mode = (fakeSystemMode == "auto") ? 1 : 0;
+  
+  g_pending_target_node = target_node;
+  g_mqtt_cmd_pending = true;
+  
+  Serial.printf(" [Hàng đợi] Đã xếp hàng lệnh cho Node 0x%02X. Chờ luồng Loop rảnh để phát...\n", target_node);
+#endif
 }
 
 void reconnect() {
@@ -143,8 +185,6 @@ void reconnect() {
     Serial.println("Dang ket noi MQTT...");
     if (client.connect("ESP32_Gateway", mqtt_user, mqtt_pass)) {
       Serial.println("MQTT Connected!");
-      
-      // 🔹 Đăng ký nhận kênh điều khiển từ Web gửi xuống thông qua Server Node.js
       client.subscribe("smartfarm/control");
     } else {
       Serial.print("Failed, rc=");
@@ -163,59 +203,37 @@ void loop() {
   client.loop();
 #endif
 
-  static unsigned long lastMsg = 0;
-  if (millis() - lastMsg > 2000) {
-    lastMsg = millis();
-
-    // 🎲 Tạo số ngẫu nhiên dao động tự nhiên cho môi trường
-    float soil = random(550, 680) / 10.0;
-    float temp = random(290, 340) / 10.0;
-    float humi = random(650, 850) / 10.0;
-    float water = random(700, 850) / 10.0;
-
-    float current_amp = 0.0;
-    float flow = 0.0;
-
-    // Logic tính toán dòng điện và lưu lượng phụ thuộc hoàn toàn vào trạng thái nút Bơm trên Web
-    if (fakePumpStatus == 1) {
-      // Dòng và lưu lượng tính toán tỷ lệ thuận theo thanh trượt PWM máy bơm trên Web
-      flow = (random(120, 150) / 10.0) * (fakePumpPwm / 100.0);
-      current_amp = (random(14, 20) / 10.0) * (fakePumpPwm / 100.0); // Dòng bình thường ~ 1.5A
-
-      // 🧠 THỬ NGHIỆM KỊCH BẢN CHẨN ĐOÁN LỖI KHẨN CẤP TRÊN WEB GUI
-      // Để test Hộp chẩn đoán đổi sang màu ĐỎ (Kẹt Motor quá dòng), mở gạch chéo 2 dòng dưới:
-      // current_amp = 3.6; flow = 0.0;
-
-      // Để test Hộp chẩn đoán đổi sang màu CAM (Hụt nước/Nghẹt ống), mở gạch chéo 2 dòng dưới:
-      // current_amp = 1.5; flow = 0.0;
-    }
-
-#ifdef ENABLE_MQTT
-    JsonDocument doc;
-    doc["soil"] = soil;
-    doc["temp"] = temp;
-    doc["humi"] = humi;
-    doc["water"] = water;
-    doc["flow"] = flow;
-    doc["current_amp"] = current_amp;
-    doc["mua"] = 0; // 0: không mưa, 1: có mưa
-    doc["mode"] = fakeSystemMode;
-    doc["pumpPwm"] = fakePumpPwm;
-    doc["roofPwm"] = fakeRoofPwm;
-
-    char buffer[256];
-    serializeJson(doc, buffer);
-    client.publish("smartfarm/sensors", buffer);
-
-    Serial.print("Da gui du lieu fake: ");
-    Serial.println(buffer);
-#else
-    // Serial.printf("soil=%.1f temp=%.1f humi=%.1f water=%.1f flow=%.1f amp=%.1f \r\n",
-    //               soil, temp, humi, water, flow, current_amp);
-#endif
-
 #ifdef ENABLE_LORA
-    loraGatewayPoll();
-#endif
+  // =========================================================================
+  // LUỒNG THỰC THI LỆNH: Đóng gói và phát sóng LoRa khi chip RF rảnh rỗi (XEN NGANG NHỊP QUÉT)
+  // =========================================================================
+  if (g_mqtt_cmd_pending) {
+    g_mqtt_cmd_pending = false; // Xóa cờ ngay lập tức để tránh trùng lặp
+    
+    extern lora_gateway_t g_gateway; // Triệu hồi đối tượng gateway chạy ngầm
+    lora_packet_t tx_packet;
+    
+    // 🌟 SỬA CHUẨN: Lấy nhịp sequence thực tế và tăng trực tiếp giá trị của hệ thống lên 1 đơn vị
+    uint32_t ctrl_seq = g_gateway.current_seq;
+    g_gateway.current_seq++; 
+
+    if (lora_packet_build(&tx_packet, g_pending_target_node, LORA_GATEWAY_ID,
+                          CMD_WRITE_CONTROL, ctrl_seq,
+                          (const uint8_t*)&g_pending_control_data,
+                          sizeof(g_pending_control_data))) {
+      
+      uint8_t wire_buffer[LORA_PACKET_MAX_SIZE];
+      size_t wire_len = lora_packet_encode(&tx_packet, wire_buffer, sizeof(wire_buffer));
+      
+      if (wire_len > 0) {
+        Serial.printf(" 📬 [Nút Bấm GUI - Luồng An Toàn] Đang phát sóng LoRa lệnh ĐIỀU KHIỂN xuống Node 0x%02X (Seq: %u)...\n", 
+                      g_pending_target_node, tx_packet.seq);
+        loraSend(wire_buffer, wire_len);
+      }
+    }
   }
+
+  // ⚡ KẾT HỢP ĐỈNH CAO: Khởi chạy máy trạng thái tự động điều phối quét mạng chu kỳ không chặn
+  loraGatewayPoll();
+#endif
 }

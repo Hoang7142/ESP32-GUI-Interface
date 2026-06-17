@@ -1,13 +1,11 @@
 /**
- * @file lora_protocol.cpp
+ * @file lora_protocol.c
  * @brief Packet build/encode/decode and CRC-16-CCITT validation.
- *        Platform-independent; shared by ESP32 gateway and STM32 nodes.
  */
 #include "lora_protocol.h"
 
 #include <string.h>
 
-/** @brief See lora_crc16() in lora_protocol.h. */
 uint16_t lora_crc16(const uint8_t* data, size_t len) {
   uint16_t crc = 0xFFFF;
 
@@ -25,13 +23,12 @@ uint16_t lora_crc16(const uint8_t* data, size_t len) {
   return crc;
 }
 
-/** @brief See lora_packet_build() in lora_protocol.h. */
 bool lora_packet_build(lora_packet_t* pkt, uint8_t dst, uint8_t src, uint8_t cmd,
                        uint8_t seq, const uint8_t* payload, uint8_t payload_len) {
-  if (pkt == nullptr || payload_len > LORA_MAX_PAYLOAD) {
+  if (pkt == NULL || payload_len > LORA_MAX_PAYLOAD) {
     return false;
   }
-  if (payload_len > 0 && payload == nullptr) {
+  if (payload_len > 0 && payload == NULL) {
     return false;
   }
 
@@ -58,9 +55,8 @@ bool lora_packet_build(lora_packet_t* pkt, uint8_t dst, uint8_t src, uint8_t cmd
   return true;
 }
 
-/** @brief See lora_packet_encode() in lora_protocol.h. */
 size_t lora_packet_encode(const lora_packet_t* pkt, uint8_t* buf, size_t buf_len) {
-  if (pkt == nullptr || buf == nullptr || pkt->payload_len > LORA_MAX_PAYLOAD) {
+  if (pkt == NULL || buf == NULL || pkt->payload_len > LORA_MAX_PAYLOAD) {
     return 0;
   }
 
@@ -86,9 +82,8 @@ size_t lora_packet_encode(const lora_packet_t* pkt, uint8_t* buf, size_t buf_len
   return wire_len;
 }
 
-/** @brief See lora_packet_decode() in lora_protocol.h. */
 bool lora_packet_decode(const uint8_t* buf, size_t buf_len, lora_packet_t* pkt_out) {
-  if (buf == nullptr || pkt_out == nullptr || buf_len < LORA_PACKET_MIN_SIZE) {
+  if (buf == NULL || pkt_out == NULL || buf_len < LORA_PACKET_MIN_SIZE) {
     return false;
   }
 
@@ -113,16 +108,17 @@ bool lora_packet_decode(const uint8_t* buf, size_t buf_len, lora_packet_t* pkt_o
     memcpy(pkt_out->payload, buf + LORA_PACKET_HEADER_SIZE, payload_len);
   }
 
-  const size_t crc_offset = LORA_PACKET_HEADER_SIZE + payload_len;
-  pkt_out->crc = (uint16_t)buf[crc_offset] |
-                 ((uint16_t)buf[crc_offset + 1] << 8);
+  {
+    const size_t crc_offset = LORA_PACKET_HEADER_SIZE + payload_len;
+    pkt_out->crc = (uint16_t)buf[crc_offset] |
+                   ((uint16_t)buf[crc_offset + 1] << 8);
+  }
 
   return lora_packet_verify_crc(pkt_out);
 }
 
-/** @brief See lora_packet_verify_crc() in lora_protocol.h. */
 bool lora_packet_verify_crc(const lora_packet_t* pkt) {
-  if (pkt == nullptr || pkt->payload_len > LORA_MAX_PAYLOAD) {
+  if (pkt == NULL || pkt->payload_len > LORA_MAX_PAYLOAD) {
     return false;
   }
 
