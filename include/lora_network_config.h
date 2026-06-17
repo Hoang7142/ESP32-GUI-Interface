@@ -2,7 +2,7 @@
 
 /**
  * @file lora_network_config.h
- * @brief Gateway/node IDs (must match ESP32_LORA gateway).
+ * @brief Default gateway/node IDs and polling timing constants.
  */
 
 #include <stdint.h>
@@ -11,18 +11,23 @@
 extern "C" {
 #endif
 
+/** Gateway (master) address on the LoRa network. */
 #define LORA_GATEWAY_ID           0x01
+
+/** Number of slave nodes in the default polling list. */
 #define LORA_NODE_COUNT           3
-#define LORA_RESPONSE_TIMEOUT_MS  2000
+
+/** Default slave node IDs polled by the gateway (0x11, 0x12, 0x13). */
+extern const uint8_t LORA_NODE_IDS[LORA_NODE_COUNT];
+
+/** Time to wait for SENSOR_DATA after sending READ_SENSOR [ms]. */
+#define LORA_RESPONSE_TIMEOUT_MS  500
+
+/** Maximum READ_SENSOR retries per node before marking it offline. */
 #define LORA_MAX_RETRIES          3
-#define LORA_POLL_INTERVAL_MS     5000
 
-/** Set one ID per board at compile time: 0x11, 0x12, or 0x13. */
-#ifndef MY_NODE_ID
-#define MY_NODE_ID                0x11 // TODO: Update to correct node ID by reading from input GPIO
-#endif
-
-#define GATEWAY_ID                LORA_GATEWAY_ID
+/** Pause between complete poll rounds (all nodes) [ms]. */
+#define LORA_POLL_INTERVAL_MS     3000
 
 #ifdef __cplusplus
 }

@@ -18,6 +18,7 @@ extern "C" {
 #define CMD_SENSOR_DATA   0x02
 #define CMD_ACK           0x03
 #define CMD_PING          0x04
+#define CMD_WRITE_CONTROL 0x05  // 🔹 Mã lệnh điều khiển mới từ Gateway gửi xuống Node
 
 #define LORA_MAX_PAYLOAD        32
 #define LORA_PACKET_HEADER_SIZE 5
@@ -33,6 +34,14 @@ extern "C" {
 #define LORA_PACKED
 #endif
 
+// 🔹 Struct nén dữ liệu nút bấm để truyền qua LoRa (Tiết kiệm băng thông)
+typedef struct LORA_PACKED {
+  uint8_t pump_status;   // 1: Bật, 0: Tắt
+  uint8_t pump_pwm;      // 0 - 100
+  uint8_t roof_status;   // 0: STOP, 1: OPEN (Mở), 2: CLOSE (Đóng)
+  uint8_t roof_pwm;      // 0 - 100
+  uint8_t system_mode;   // 0: manual (thủ công), 1: auto (tự động)
+} lora_control_payload_t;
 typedef struct LORA_PACKED {
   uint8_t dst;
   uint8_t src;
