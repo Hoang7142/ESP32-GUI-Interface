@@ -8,7 +8,7 @@
 #include <string.h>
 
 // 🔹 ĐẶT MẢNG ĐỊNH NGHĨA CHUNG LÊN ĐẦU FILE NGOÀI TẤT CẢ CÁC CẶP LỆNH
-static const uint8_t LORA_NODE_IDS[LORA_NODE_COUNT] = {0x11, 0x12, 0x13};
+ //const uint8_t LORA_NODE_IDS[LORA_NODE_COUNT] = {0x11, 0x12, 0x13};
 
 #ifdef ARDUINO
 #include <Arduino.h>
@@ -26,6 +26,7 @@ static lora_node_status_t* find_node_status(lora_gateway_t* gw, uint8_t node_id)
   }
   return nullptr;
 }
+//quét địa chỉ con trỏ chi tới ô nhớ của ID node đó
 
 /** @brief Return the node ID currently being polled. */
 static uint8_t current_node_id(const lora_gateway_t* gw) {
@@ -34,6 +35,7 @@ static uint8_t current_node_id(const lora_gateway_t* gw) {
   }
   return gw->config.node_ids[gw->current_node_index];
 }
+// quét địa chỉ ID hiện tại mà gateway đang làm việc
 
 /** @brief Mark a node online and reset its failure counter. */
 static void mark_node_online(lora_gateway_t* gw, uint8_t node_id, uint32_t now_ms) {
@@ -41,9 +43,10 @@ static void mark_node_online(lora_gateway_t* gw, uint8_t node_id, uint32_t now_m
   if (status != nullptr) {
     status->online = true;
     status->last_seen_ms = now_ms;
-    status->fail_count = 0;
+    status->fail_count = 0;// hoàn tác biến đếm lỗi về 0 vì node đó đã onine
   }
 }
+//find_node_status để tìm ô nhớ của Node đó. Nếu tìm thấy, nó ép biến online = true, ghi nhận mốc thời gian sống sót cuối cùng last_seen_ms = now_ms, và reset bộ đếm lỗi liên tiếp về 0 (fail_count = 0).
 
 /** @brief Mark a node offline and increment its failure counter. */
 static void mark_node_offline(lora_gateway_t* gw, uint8_t node_id) {
@@ -53,62 +56,68 @@ static void mark_node_offline(lora_gateway_t* gw, uint8_t node_id) {
     status->fail_count++;
   }
 }
+//Tìm ô nhớ của Node, ép biến online = false, và tăng biến đếm lỗi liên tiếp lên 1 đơn vị (fail_count++).
 
 /** @brief Switch gateway state and record the entry timestamp. */
 static void transition(lora_gateway_t* gw, lora_gateway_state_t next_state, uint32_t now_ms) {
   gw->state = next_state;
-  gw->state_enter_ms = now_ms;
+  gw->state_enter_ms = now_ms;// mốc thời gian chuyển đổi trạng thái, việc này giúp hệ thống biết trạng thái này đứng dc bao lâu để tính timeout
 }
+//Ghi đè trạng thái mới vào biến gw->state. Đồng thời, nó chụp lại mốc thời gian hiện tại gw->state_enter_ms = now_ms, để bt có lỗi hay k và lỗi lâu chưa
 
 /** @brief Build and transmit CMD_READ_SENSOR to the current node. */
 static bool send_read_sensor(lora_gateway_t* gw) {
   lora_packet_t pkt;
-  const uint8_t node_id = current_node_id(gw);
+  const uint8_t node_id = current_node_id(gw);//Lấy ID của Node hiện tại
   if (!lora_packet_build(&pkt, node_id, gw->config.gateway_id, CMD_READ_SENSOR, gw->current_seq, nullptr, 0)) {
     return false;
   }
   uint8_t wire[LORA_PACKET_MAX_SIZE];
-  const size_t wire_len = lora_packet_encode(&pkt, wire, sizeof(wire));
+  const size_t wire_len = lora_packet_encode(&pkt, wire, sizeof(wire));//chuyển đổi gói tin cấu trúc sang chuỗi byte nhị phân để có thể truyền qua sóng radio.
   if (wire_len == 0) {
     return false;
   }
-  return gw->radio.send != nullptr && gw->radio.send(wire, wire_len);
+  return gw->radio.send != nullptr && gw->radio.send(wire, wire_len);// kiểm tra nếu trống thì gửi sóng lora
 }
+// hàm gửi gói tin(đã đóng gói và phát sóng)
 
 /** @brief End the current poll round and schedule the next one. */
 static void finish_poll_round(lora_gateway_t* gw, uint32_t now_ms) {
-  gw->poll_active = false;
-  gw->next_poll_ms = now_ms + gw->config.poll_interval_ms;
-  transition(gw, LORA_GW_STATE_IDLE, now_ms);
+  gw->poll_active = false;// hạ cờ khi quét xong
+  gw->next_poll_ms = now_ms + gw->config.poll_interval_ms;// thời gian quét tiếp theo bằng thời gian hiện tại cộng thời gian nghỉ
+  transition(gw, LORA_GW_STATE_IDLE, now_ms);//gọi hàm transition đưa Gateway về trạng thái nghỉ ngơi LORA_GW_STATE_IDLE.
 }
+//Tuyên bố kết thúc một vòng đi tuần qua tất cả các Node
 
 /** @brief Move to the next node in the list, or finish the poll round. */
 static void advance_to_next_node(lora_gateway_t* gw, uint32_t now_ms) {
-  gw->current_node_index++;
-  gw->retry_count = 0;
-  gw->current_seq++;
+  gw->current_node_index++;// qua node kế tiếp
+  gw->retry_count = 0;// reset biến thử về 0
+  gw->current_seq++;//tăng mã số gói tin để tránh trùng lặp
   if (gw->current_node_index >= gw->config.node_count) {
     finish_poll_round(gw, now_ms);
     return;
   }
   transition(gw, LORA_GW_STATE_SEND_REQUEST, now_ms);
 }
+// hàm dời con trỏ sang node tiếp theo để quét tiếp tục
 
 /** @brief Handle response timeout: retry or mark node offline and continue. */
-static void handle_timeout(lora_gateway_t* gw, uint32_t now_ms) {
+static void handle_timeout(lora_gateway_t* gw, uint32_t now_ms) {// hàm xử lý khi node không trả lời
   const uint8_t node_id = current_node_id(gw);
   gw->retry_count++;
-  if (gw->retry_count < gw->config.max_retries) {
-    transition(gw, LORA_GW_STATE_SEND_REQUEST, now_ms);
+  if (gw->retry_count < gw->config.max_retries) {// nếu vẫn trong thời gian cho phép
+    transition(gw, LORA_GW_STATE_SEND_REQUEST, now_ms);// phát lệnh gọi node đó lần nựa
     return;
   }
-  mark_node_offline(gw, node_id);
-  advance_to_next_node(gw, now_ms);
+  mark_node_offline(gw, node_id);// nếu node k trả lời đánh dấu offline
+  advance_to_next_node(gw, now_ms);// tăng con trỏ quét qua node mới
 }
+// nếu  thời gian vẫn nhở hơn thì chuyển về trạng thái (LORA_GW_STATE_SEND_REQUEST) để phát lệnh một lần nữa, nếu gọi lại k dc , đánh dấu offline và dugnf hàm (advance_to_next_node) để quét node khác
 
 /** @brief Validate SENSOR_DATA (src, cmd, seq) and dispatch to callback. */
 /** @brief Validate phản hồi (src, cmd, seq) và điều phối sang hàm xử lý tương ứng */
-static void process_response(lora_gateway_t* gw, const lora_packet_t* pkt, int16_t rssi, uint32_t now_ms) {
+static void process_response(lora_gateway_t* gw, const lora_packet_t* pkt, int16_t rssi, uint32_t now_ms) {// hàm này xử lý gói tin nhận được
   const uint8_t expected_node = current_node_id(gw);
   
   // Kiểm tra xem có đúng là gói tin phản hồi từ Node mà Gateway vừa gọi tên không
@@ -117,9 +126,9 @@ static void process_response(lora_gateway_t* gw, const lora_packet_t* pkt, int16
 
   // 🌟 TRƯỜNG HỢP A: Nhận gói dữ liệu 7 cảm biến thực tế theo chu kỳ quét ngầm
   if (pkt->cmd == CMD_SENSOR_DATA) {
-    mark_node_online(gw, expected_node, now_ms);
+    mark_node_online(gw, expected_node, now_ms);// đánh dấu node còn sống
     if (gw->on_sensor_data != nullptr) {
-      gw->on_sensor_data(expected_node, pkt->payload, pkt->payload_len, rssi);
+      gw->on_sensor_data(expected_node, pkt->payload, pkt->payload_len, rssi);// Kích hoạt hàm sự kiện callback để xử lý in dữ liệu/đẩy MQTT
     }
     advance_to_next_node(gw, now_ms);
   }
@@ -135,6 +144,7 @@ static void process_response(lora_gateway_t* gw, const lora_packet_t* pkt, int16
       Serial.printf("\n[LoRa Gateway] 🎉 Bắt được gói CMD_ACK xác nhận trạng thái thực tế từ Node 0x%02X!\n", pkt->src);
 
       // Triệu hồi đối tượng MQTT và các biến đồng bộ từ file main.cpp sang
+      // Sử dụng từ khóa extern để triệu hồi các biến toàn cục nằm ở file main.cpp sang để cập nhật giá trị mới
       extern PubSubClient client;
       extern int fakePumpStatus;
       extern int fakePumpPwm;
@@ -162,7 +172,7 @@ static void process_response(lora_gateway_t* gw, const lora_packet_t* pkt, int16
         char feedbackBuffer[128];
         serializeJson(feedbackDoc, feedbackBuffer);
         
-        client.publish("smartfarm/feedback", feedbackBuffer);
+        client.publish("smartfarm/feedback", feedbackBuffer);// Bắn dữ liệu lên HiveMQ Broker
         Serial.printf("   🚀 [MQTT Feedback] Đã publish trạng thái thực tế lên Web: %s\n", feedbackBuffer);
       }
     }
@@ -180,13 +190,13 @@ bool lora_gateway_init(lora_gateway_t* gw, const lora_gateway_config_t* config, 
   if (radio->send == nullptr || radio->rx_pending == nullptr || radio->receive == nullptr || radio->millis == nullptr) {
     return false;
   }
-  memset(gw, 0, sizeof(*gw));
+  memset(gw, 0, sizeof(*gw));//Dùng memset xóa sạch sẽ cấu trúc gw về trạng thái trống.
   gw->config = *config;
-  gw->radio = *radio;
+  gw->radio = *radio;//nạp các con trỏ hàm điều khiển phần cứng (radio).
   gw->on_sensor_data = on_sensor_data;
   gw->node_status = status_buf;
   gw->node_status_count = config->node_count;
-  gw->state = LORA_GW_STATE_IDLE;
+  gw->state = LORA_GW_STATE_IDLE;// trạng thái ban đầu
   gw->current_seq = 1;
   for (uint8_t i = 0; i < config->node_count; i++) {
     gw->node_status[i].node_id = config->node_ids[i];
@@ -203,61 +213,80 @@ void lora_gateway_start_poll(lora_gateway_t* gw) {
   gw->retry_count = 0;
   transition(gw, LORA_GW_STATE_SEND_REQUEST, now_ms);
 }
+// hàm ép gatewa bắt đầu quét các node
 
 void lora_gateway_poll(lora_gateway_t* gw) {
   if (gw == nullptr || gw->radio.millis == nullptr) return;
-  const uint32_t now_ms = gw->radio.millis();
+  const uint32_t now_ms = gw->radio.millis();// Liên tục cập nhật thời gian thực hiện tại hành trình
   if (gw->state == LORA_GW_STATE_IDLE) {
+    // Nếu chưa quét và thời gian hiện tại đã vượt qua mốc thời gian nghỉ quy định
     if (!gw->poll_active && now_ms >= gw->next_poll_ms) {
-      lora_gateway_start_poll(gw);
+      lora_gateway_start_poll(gw);// Tự động kích hoạt chu kỳ quét mới
     }
     return;
+    //Nếu đang IDLE: Kiểm tra xem đã hết thời gian nghỉ chưa (now_ms >= gw->next_poll_ms). Nếu hết giờ nghỉ, tự động gọi lora_gateway_start_poll() để đi quét lượt mới.
   }
   if (gw->state == LORA_GW_STATE_SEND_REQUEST) {
     if (send_read_sensor(gw)) {
+      // Nếu phát sóng lệnh thành công, chuyển máy sang trạng thái "Nằm vùng đợi phản hồi"
       transition(gw, LORA_GW_STATE_WAIT_RESPONSE, now_ms);
     } else {
+      // Nếu lỗi phần cứng không phát được, xử lý tính toán lỗi/thử lại luôn
       handle_timeout(gw, now_ms);
     }
     return;
   }
+  //Nếu đang SEND_REQUEST: Gọi hàm phát lệnh send_read_sensor(). Nếu phát thành công, chuyển máy sang trạng thái nằm vùng chờ đợi (WAIT_RESPONSE). Nếu phát thất bại do lỗi chip, gọi ngay handle_timeout()
   if (gw->state == LORA_GW_STATE_WAIT_RESPONSE) {
+    // Bước 3.1: Kiểm tra xem Anten phần cứng có báo có sóng dữ liệu về không
     if (gw->radio.rx_pending != nullptr && gw->radio.rx_pending()) {
       uint8_t raw[LORA_PACKET_MAX_SIZE];
       int16_t rssi = 0;
+      // Thực hiện đọc mảng byte thô từ chip LoRa về biến mang tên 'raw'
       const int rx_len = gw->radio.receive != nullptr ? gw->radio.receive(raw, sizeof(raw), &rssi) : 0;
       if (rx_len > 0) {
         lora_packet_t pkt;
+        // Tiến hành giải mã chuỗi byte nhị phân thô thành gói tin cấu trúc logic 'pkt'
         if (lora_packet_decode(raw, static_cast<size_t>(rx_len), &pkt)) {
+          // Kiểm tra xem địa chỉ đích đến của gói tin này có phải gửi đích danh cho Gateway không
           if (pkt.dst == gw->config.gateway_id) {
             process_response(gw, &pkt, rssi, now_ms);
             return;
+            //Nếu đang WAIT_RESPONSE: 1. Kiểm tra xem phần cứng có báo nhận được sóng không (rx_pending()). Nếu có sóng, đọc mảng byte thô về, giải mã gói tin. Nếu gói tin chuẩn và gửi đích danh cho Gateway (pkt.dst == gateway_id), ném gói tin vào hàm process_response() để xử lý.
           }
         }
       }
     }
+    // Bước 3.2: Nếu Anten không nhận được gì, liên tục kiểm tra thời gian đứng đợi tại trạng thái này
     if (now_ms - gw->state_enter_ms >= gw->config.response_timeout_ms) {
       handle_timeout(gw, now_ms);
     }
     return;
+    //Nếu không có sóng, nó liên tục kiểm tra thời gian. Nếu thời gian chờ vượt ngưỡng timeout (now_ms - state_enter_ms >= response_timeout_ms), nó kích hoạt hàm handle_timeout().
   }
   if (gw->state == LORA_GW_STATE_NEXT_NODE) {
     advance_to_next_node(gw, now_ms);
   }
 }
-
-lora_gateway_state_t lora_gateway_get_state(const lora_gateway_t* gw) {
+//Nếu đang LORA_GW_STATE_NEXT_NODE: Gọi hàm advance_to_next_node() để nhảy Node.
+lora_gateway_state_t lora_gateway_get_state(const lora_gateway_t* gw) {//rả về trạng thái hiện tại của máy trạng thái nhằm mục đích Debug.
   return gw != nullptr ? gw->state : LORA_GW_STATE_IDLE;
 }
 
-const lora_node_status_t* lora_gateway_get_node_status(const lora_gateway_t* gw, uint8_t node_id) {
+const lora_node_status_t* lora_gateway_get_node_status(const lora_gateway_t* gw, uint8_t node_id) {//Cho phép các file code khác gọi tới để xem Node bất kỳ đang Online hay Offline để hiển thị lên đèn LED hoặc màn hình.
   if (gw == nullptr) return nullptr;
   return find_node_status(const_cast<lora_gateway_t*>(gw), node_id);
 }
 
 #ifdef ARDUINO
-namespace {
 lora_gateway_t g_gateway;
+    extern PubSubClient client;
+    extern int fakePumpStatus;
+    extern int fakePumpPwm;
+    extern int fakeRoofPwm;
+    extern String fakeSystemMode;
+namespace {
+//lora_gateway_t g_gateway;
 lora_node_status_t g_node_status[LORA_NODE_COUNT];
 lora_gateway_state_t g_last_gateway_state = LORA_GW_STATE_IDLE;
 
@@ -283,9 +312,10 @@ int gatewayRadioReceive(uint8_t* data, size_t max_len, int16_t* rssi_out) {
   return loraReceive(data, max_len, rssi_out, &snr);
 }
 uint32_t gatewayRadioMillis() { return millis(); }
+//Đây là nơi tác giả "móc" các hàm logic của máy trạng thái vào hàm thực tế của thư viện phần cứng ESP32 (loraSend, loraRxPending, loraReceive, millis()).
 
 /** @brief Gateway callback: 🌟 TINH TÚY: xử lý giải mã 7 cảm biến thật và truyền MQTT JSON của bạn */
-void onSensorData(uint8_t node_id, const uint8_t* payload, uint8_t payload_len, int16_t rssi) {
+void onSensorData(uint8_t node_id, const uint8_t* payload, uint8_t payload_len, int16_t rssi) {// hàm xử lý dữ liệu từ các node
   Serial.print(F("\n[LoRa] Bắt được gói SENSOR_DATA từ Node 0x"));
   Serial.print(node_id, HEX);
   Serial.print(F(", RSSI: "));
@@ -295,7 +325,7 @@ void onSensorData(uint8_t node_id, const uint8_t* payload, uint8_t payload_len, 
 
   if (payload_len >= sizeof(lora_sensor_payload_t)) {
     lora_sensor_payload_t sensor;
-    memcpy(&sensor, payload, sizeof(sensor));
+    memcpy(&sensor, payload, sizeof(sensor));// đổ dữ liệu vào cấu trúc struct
     
     // 🌟 TINH TÚY CỦA BẠN: Rã gói và tính toán số thực đủ cho 7 cảm biến thật
     float real_temp  = static_cast<float>(sensor.temperature_c10) / 10.0f;
@@ -310,11 +340,11 @@ void onSensorData(uint8_t node_id, const uint8_t* payload, uint8_t payload_len, 
                   real_temp, real_humi, real_soil, real_water, real_flow, real_amp, real_rain);
 
     // Triệu hồi bộ truyền MQTT và các biến đồng bộ từ file main.cpp cũ của bạn sang
-    extern PubSubClient client;
-    extern int fakePumpStatus;
-    extern int fakePumpPwm;
-    extern int fakeRoofPwm;
-    extern String fakeSystemMode;
+    // extern PubSubClient client;
+    // extern int fakePumpStatus;
+    // extern int fakePumpPwm;
+    // extern int fakeRoofPwm;
+    // extern String fakeSystemMode;
 
     // Đóng gói JSON thực tế đẩy thẳng lên HiveMQ Broker của bạn
     if (client.connected()) {
@@ -331,9 +361,9 @@ void onSensorData(uint8_t node_id, const uint8_t* payload, uint8_t payload_len, 
       doc["roofPwm"]     = fakeRoofPwm;
 
       char mqtt_buffer[256];
-      serializeJson(doc, mqtt_buffer);
+      serializeJson(doc, mqtt_buffer);//// Chuyển cấu trúc JSON thành một chuỗi văn bản văn bản
       
-      client.publish("smartfarm/sensors", mqtt_buffer);
+      client.publish("smartfarm/sensors", mqtt_buffer);//đẩy gói JSON này lên HiveMQ để giao diện Web bắt lấy hiển thị lên biểu đồ.
       Serial.println(F("   🚀 [MQTT HiveMQ] Đã đồng bộ JSON dữ liệu thật lên Web GUI!"));
     }
   } else {

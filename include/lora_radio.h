@@ -7,6 +7,9 @@
 
 #include <Arduino.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 /**
  * @brief Initialize SX1278 over SPI, apply modem settings from lora_config.h,
  *        and enter continuous RX mode with DIO0 interrupt.
@@ -40,3 +43,6 @@ int loraReceive(uint8_t* data, size_t maxLen, int16_t* rssiOut, float* snrOut);
 
 /** @brief Print pin and chip info to Serial (debug helper). */
 void loraPrintChipStatus();
+#ifdef __cplusplus
+}
+#endif

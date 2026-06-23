@@ -17,14 +17,14 @@ SX1278 radio = new Module(LORA_NSS, LORA_DIO0, LORA_RST, RADIOLIB_NC, loraSpi);
 
 volatile bool rxFlag = false; /**< Set by DIO0 ISR when RxDone fires. */
 
-constexpr uint16_t kIrqRxDone = RADIOLIB_SX127X_CLEAR_IRQ_FLAG_RX_DONE;
+constexpr uint16_t kIrqRxDone = RADIOLIB_SX127X_CLEAR_IRQ_FLAG_RX_DONE;//Đây là một hằng số mặt nạ bit (bitmask) của RadioLib đại diện cho sự kiện: "Đã nhận xong xuôi một gói tin chuẩn".
 
 #if defined(ESP8266) || defined(ESP32)
 /** @brief DIO0 interrupt handler: set rxFlag on RxDone only. */
 void IRAM_ATTR onPacketReceived() {
   // DIO0 is mapped to RxDone only while in RX; ignore any other IRQ source.
   if (radio.getIRQFlags() & kIrqRxDone) {
-    rxFlag = true;
+    rxFlag = true;// nếu đúng thì bật cờ
   }
 }
 #else
@@ -37,7 +37,7 @@ void onPacketReceived() {
 #endif
 
 /** @brief Register onPacketReceived() on DIO0. */
-void attachRxInterrupt() { radio.setPacketReceivedAction(onPacketReceived); }
+void attachRxInterrupt() { radio.setPacketReceivedAction(onPacketReceived); }//kich hoat lien kết chân DIO0 với hàm ngắt
 
 /** @brief Unregister DIO0 interrupt (required before TX). */
 void detachRxInterrupt() { radio.clearPacketReceivedAction(); }
@@ -81,6 +81,7 @@ bool startRx() {
   }
   return true;
 }
+//Hàm này ra lệnh cho chip SX1278 bật anten lên, liên tục quét sóng trong không trung ở chế độ Non-blocking (Không chặn). Gọi hàm này xong, ESP32 thoải mái đi làm việc khác, chip LoRa cứ tự động nghe ngóng ngầm bên dưới.
 
 }  // namespace
 
@@ -139,19 +140,23 @@ bool loraBegin() {
 
 /** @brief See loraSend() in lora_radio.h. */
 bool loraSend(const uint8_t* data, size_t len) {
+  // 1. Kiểm tra an toàn dữ liệu đầu vào
   if (data == nullptr || len == 0 || len > LORA_MAX_PACKET_LEN) {
     Serial.println(F("Invalid TX payload"));
     return false;
   }
 
   // During TX the chip maps DIO0 to TxDone; detach ISR so TxDone cannot set rxFlag.
+  // 1. Tạm gỡ ngắt thu để chip không bị kích hoạt ngắt giả bởi sóng phản xạ của chính mình
   detachRxInterrupt();
   rxFlag = false;
 
+  // 3. Ra lệnh phát sóng (Hàm này là Hàm Chặn - Blocking, phát xong mới chạy tiếp)
   int16_t state = radio.transmit(const_cast<uint8_t*>(data), len);
 
-  rxFlag = false;
+  rxFlag = false;// Xóa cờ ngắt giả nếu có
 
+  // 4. Nếu phát lỗi, lập tức bật lại chế độ nghe để cứu mạng mạng lưới
   if (state != RADIOLIB_ERR_NONE) {
     logState("radio.transmit", state);
     if (!startRx()) {
@@ -166,6 +171,7 @@ bool loraSend(const uint8_t* data, size_t len) {
   Serial.println(F(" bytes)"));
 
   // startReceive() remaps DIO0 to RxDone before re-enabling the ISR.
+  // 5. Phát thành công, chuyển chip quay lại chế độ Nghe ngầm và gắn lại ngắt
   if (!startRx()) {
     attachRxInterrupt();
     return false;
@@ -175,32 +181,35 @@ bool loraSend(const uint8_t* data, size_t len) {
 }
 
 /** @brief See loraRxPending() in lora_radio.h. */
-bool loraRxPending() { return rxFlag; }
+bool loraRxPending() { return rxFlag; }// hàm kiểm tra túi tin
 
 /** @brief See loraReceive() in lora_radio.h. */
 int loraReceive(uint8_t* data, size_t maxLen, int16_t* rssiOut, float* snrOut) {
   if (!rxFlag) {
     return 0;
   }
+//Nếu rxFlag == false (nghĩa là chân ngắt DIO0 chưa hề báo có sóng), hàm lập tức quay xe và return 0.
 
   if (data == nullptr || maxLen == 0) {
     return -1;
   }
 
-  rxFlag = false;
+  rxFlag = false;//Khi đã xác nhận có gói hàng, việc đầu tiên là ta phải xóa (hạ) cái cờ này xuống về false để chuẩn bị tinh thần đón nhận gói tin tiếp theo ở chu kỳ sau
 
   size_t length = radio.getPacketLength(true);
   if (length > maxLen) {
     length = maxLen;
   }
+// bảo vệ độ dài gói tin
 
-  int16_t state = radio.readData(data, length);
-  if (state == RADIOLIB_ERR_CRC_MISMATCH) {
+  int16_t state = radio.readData(data, length);// đưa dữ liệu từ FIFO sang mảng data nằm trong ram của MCU
+  //Biến state sẽ nhận về kết quả kiểm tra chất lượng từ thư viện RadioLib.
+  if (state == RADIOLIB_ERR_CRC_MISMATCH) {// kiểm tra lỗi CRC
     logState("radio.readData", state);
     startRx();
     return -1;
   }
-  if (state != RADIOLIB_ERR_NONE) {
+  if (state != RADIOLIB_ERR_NONE) {//kiểm tra lỗi gửi không thành công
     logState("radio.readData", state);
     startRx();
     return -1;
