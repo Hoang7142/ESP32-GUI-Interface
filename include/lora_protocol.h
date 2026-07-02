@@ -60,7 +60,15 @@ typedef struct LORA_PACKED {
 	uint16_t current_mA;  
 	uint8_t rain_status;
 	uint8_t flow_rate_Lmin_x10;
-} lora_sensor_payload_t;
+// --- 🌟 THÊM 3 BIẾN NÀY ĐỂ ĐỒNG BỘ NGƯỢC NÚT NHẤN VẬT LÝ ---
+    uint8_t system_mode;  // 1: AUTO, 0: MANUAL
+    uint8_t pump_status;  // 1: ON, 0: OFF
+    uint8_t roof_status;  // 1: OPEN, 2: CLOSE, 0: STOP
+    // --- 🌟 THÊM BIẾN NÀY ĐỂ KHỚP 100% VỚI STM32 ---
+    uint8_t pump_diagnostic;  // 0: OK, 1: Chạy khô, 2: Quá dòng
+} __attribute__((packed)) lora_sensor_payload_t;
+// ⚠️ LƯU Ý: Phải có cụm "__attribute__((packed))" để ép các vi điều khiển không tự ý 
+// chèn ô nhớ trống (Padding), giúp STM32 và ESP32 hiểu mạch dữ liệu khít nhau 100%.
 
 uint16_t lora_crc16(const uint8_t* data, size_t len);
 

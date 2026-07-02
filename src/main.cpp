@@ -63,6 +63,8 @@ volatile bool g_mqtt_cmd_pending = false;
 lora_control_payload_t g_pending_control_data;
 // Biến lưu ID của Node cần điều khiển (nếu hệ thống của bạn có nhiều Node)
 uint8_t g_pending_target_node = 0x11;
+// 🌟 THÊM DÒNG NÀY: Cờ báo hiệu hệ thống đang đứng đợi gói ACK của nút bấm GUI
+volatile bool g_waiting_for_control_ack = false;
 
 // Biến lưu trạng thái đồng bộ thực tế với các thanh trượt PWM và nút bấm Web GUI
 int fakePumpStatus = 0;
@@ -209,42 +211,45 @@ void loop() {
 
 #ifdef ENABLE_LORA
   // =========================================================================
-  // LUỒNG THỰC THI LỆNH: Đóng gói và phát sóng LoRa khi chip RF rảnh rỗi (XEN NGANG NHỊP QUÉT)
+  // LUỒNG THỰC THI LỆNH: Đóng gói và phát sóng LoRa xen ngang khi có yêu cầu từ Web
   // =========================================================================
   if (g_mqtt_cmd_pending) {
     g_mqtt_cmd_pending = false; // Xóa cờ ngay lập tức để tránh trùng lặp
     
-    extern lora_gateway_t g_gateway; // Triệu hồi đối tượng gateway chạy ngầm
     lora_packet_t tx_packet;
     
-    // 🌟 SỬA CHUẨN: Lấy nhịp sequence thực tế và tăng trực tiếp giá trị của hệ thống lên 1 đơn vị
-    // ĐỒNG BỘ MÃ SỐ SEQUENCE: Lấy số sequence hiện tại của máy quét ngầm nạp vào gói tin khẩn cấp,
-    // sau đó tăng trực tiếp sequence của hệ thống lên 1 đơn vị. Việc này giúp mạng không bị lệch nhịp gói tin.
-    uint32_t ctrl_seq = g_gateway.current_seq;
-    g_gateway.current_seq++; 
+    // Sử dụng bộ đếm mã số gói (seq) ĐỘC LẬP cho nút bấm để không phá nhịp quét cảm biến
+    static uint8_t control_seq = 0;
+    control_seq++; 
 
-    // Gọi hàm lora_packet_build để nén toàn bộ dữ liệu nút bấm (g_pending_control_data) 
-    // thành cấu trúc gói tin mang mã lệnh CMD_WRITE_CONTROL gửi đích danh tới Node đích.
+    // Gọi hàm lora_packet_build để nén dữ liệu nút bấm gửi đích danh tới Node đích
     if (lora_packet_build(&tx_packet, g_pending_target_node, LORA_GATEWAY_ID,
-                          CMD_WRITE_CONTROL, ctrl_seq,
+                          CMD_WRITE_CONTROL, control_seq,
                           (const uint8_t*)&g_pending_control_data,
                           sizeof(g_pending_control_data))) {
       
-      uint8_t wire_buffer[LORA_PACKET_MAX_SIZE];// Tạo mảng byte thô để chứa dữ liệu mã hóa nén
-      size_t wire_len = lora_packet_encode(&tx_packet, wire_buffer, sizeof(wire_buffer));// Tiến hành mã hóa mã mạng
+      uint8_t wire_buffer[LORA_PACKET_MAX_SIZE]; 
+      size_t wire_len = lora_packet_encode(&tx_packet, wire_buffer, sizeof(wire_buffer)); 
       
       if (wire_len > 0) {
-        Serial.printf(" 📬 [Nút Bấm GUI - Luồng An Toàn] Đang phát sóng LoRa lệnh ĐIỀU KHIỂN xuống Node 0x%02X (Seq: %u)...\n", 
+        Serial.printf(" 📬 [Nút Bấm GUI] Đang phát sóng LoRa lệnh ĐIỀU KHIỂN xuống Node 0x%02X (Ctrl Seq: %u)...\n", 
                       g_pending_target_node, tx_packet.seq);
-        loraSend(wire_buffer, wire_len);// PHÓNG SÓNG LORA ra không trung ngay lập tức!
+        loraSend(wire_buffer, wire_len); // PHÓNG SÓNG LORA!
+        
+        // 🔥 VÁ LỖI TRẠNG THÁI VÀ BẬT CỜ ĐỢI ACK ĐIỀU KHIỂN
+        extern lora_gateway_t g_gateway;
+        extern volatile bool g_waiting_for_control_ack;
+        
+        g_gateway.state = LORA_GW_STATE_WAIT_RESPONSE;
+        g_gateway.state_enter_ms = millis(); // Chụp mốc thời gian bắt đầu đợi ACK
+        g_waiting_for_control_ack = true;    // Kích hoạt cờ: "Tôi đang đợi ACK nút bấm"
+        
+        Serial.println("   🔄 [Hệ Thống] Đã sửa lỗi Anten Điếc & Chuyển Gateway sang trạng thái đợi phản hồi ACK!");
       }
     }
   }
 
-  // ⚡ KẾT HỢP ĐỈNH CAO: Khởi chạy máy trạng thái tự động điều phối quét mạng chu kỳ không chặn
-  // 3. ĐIỀU PHỐI MẠNG CHU KỲ: Kích hoạt máy trạng thái đi tuần ngầm. 
-  // Hàm này chạy theo cơ chế kiểm tra thời gian (Non-blocking) nên nó không gây đứng chip, 
-  // vừa quét cảm biến bình thường vừa nhường chỗ cho luồng nút bấm khẩn cấp ở trên xử lý mượt mà.
+  // ⚡ KẾT HỢP ĐỈNH CAO: Kích hoạt máy trạng thái đi tuần ngầm (Không chặn luồng điều khiển)
   loraGatewayPoll();
 #endif
 }

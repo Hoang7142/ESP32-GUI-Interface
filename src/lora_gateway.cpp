@@ -117,34 +117,19 @@ static void handle_timeout(lora_gateway_t* gw, uint32_t now_ms) {// hàm xử l�
 
 /** @brief Validate SENSOR_DATA (src, cmd, seq) and dispatch to callback. */
 /** @brief Validate phản hồi (src, cmd, seq) và điều phối sang hàm xử lý tương ứng */
-static void process_response(lora_gateway_t* gw, const lora_packet_t* pkt, int16_t rssi, uint32_t now_ms) {// hàm này xử lý gói tin nhận được
-  const uint8_t expected_node = current_node_id(gw);
+/** @brief Validate phản hồi và điều phối sang hàm xử lý tương ứng */
+static void process_response(lora_gateway_t* gw, const lora_packet_t* pkt, int16_t rssi, uint32_t now_ms) {
   
-  // Kiểm tra xem có đúng là gói tin phản hồi từ Node mà Gateway vừa gọi tên không
-  if (pkt->src != expected_node) return;
-  if (pkt->seq != gw->current_seq) return;
-
-  // 🌟 TRƯỜNG HỢP A: Nhận gói dữ liệu 7 cảm biến thực tế theo chu kỳ quét ngầm
-  if (pkt->cmd == CMD_SENSOR_DATA) {
-    mark_node_online(gw, expected_node, now_ms);// đánh dấu node còn sống
-    if (gw->on_sensor_data != nullptr) {
-      gw->on_sensor_data(expected_node, pkt->payload, pkt->payload_len, rssi);// Kích hoạt hàm sự kiện callback để xử lý in dữ liệu/đẩy MQTT
-    }
-    advance_to_next_node(gw, now_ms);
-  }
-  // 🌟 TRƯỜNG HỢP B: Nhận gói ACK phản hồi trạng thái nút bấm (Xử lý Bước 2 và Bước 3)
-  else if (pkt->cmd == CMD_ACK) {
-    mark_node_online(gw, expected_node, now_ms);
+  // 🌟 ƯU TIÊN TOÀN CỤC: Nếu nhận gói ACK phản hồi từ nút bấm, xử lý ngay lập tức
+  if (pkt->cmd == CMD_ACK) {
+    mark_node_online(gw, pkt->src, now_ms);
     
-    // Nếu gói ACK này mang theo payload trạng thái nút bấm thực tế từ STM32 báo về
     if (pkt->payload_len == sizeof(lora_control_payload_t)) {
       lora_control_payload_t state;
       memcpy(&state, pkt->payload, sizeof(state));
 
       Serial.printf("\n[LoRa Gateway] 🎉 Bắt được gói CMD_ACK xác nhận trạng thái thực tế từ Node 0x%02X!\n", pkt->src);
 
-      // Triệu hồi đối tượng MQTT và các biến đồng bộ từ file main.cpp sang
-      // Sử dụng từ khóa extern để triệu hồi các biến toàn cục nằm ở file main.cpp sang để cập nhật giá trị mới
       extern PubSubClient client;
       extern int fakePumpStatus;
       extern int fakePumpPwm;
@@ -152,32 +137,57 @@ static void process_response(lora_gateway_t* gw, const lora_packet_t* pkt, int16
       extern String fakeRoofStatus;
       extern String fakeSystemMode;
 
-      // Cập nhật lại các biến trạng thái trên ESP32 theo đúng báo cáo thực tế từ phần cứng STM32
       fakePumpStatus = state.pump_status;
       fakePumpPwm    = state.pump_pwm;
       fakeRoofPwm    = state.roof_pwm;
       fakeSystemMode = (state.system_mode == 1) ? "auto" : "manual";
-      if (state.roof_status == 1)      fakeRoofStatus = "OPEN";
-      else if (state.roof_status == 2) fakeRoofStatus = "CLOSE";
-      else                             fakeRoofStatus = "STOP";
+      if (state.roof_status == 1)       fakeRoofStatus = "OPEN";
+      else if (state.roof_status == 2)  fakeRoofStatus = "CLOSE";
+      else                              fakeRoofStatus = "STOP";
 
-      // 🚀 THỰC HIỆN BƯỚC 3: Đóng gói JSON xác nhận trạng thái thực tế và bắn lên MQTT feedback
       if (client.connected()) {
         JsonDocument feedbackDoc;
+        feedbackDoc["node_id"] = pkt->src; 
         feedbackDoc["pump"]   = fakePumpStatus;
         feedbackDoc["roof"]   = fakeRoofStatus;
         feedbackDoc["mode"]   = fakeSystemMode;
-        feedbackDoc["status"] = "SUCCESS"; // Báo cho Web biết phần cứng đã thi hành thành công
+        feedbackDoc["status"] = "SUCCESS"; 
 
         char feedbackBuffer[128];
         serializeJson(feedbackDoc, feedbackBuffer);
         
-        client.publish("smartfarm/feedback", feedbackBuffer);// Bắn dữ liệu lên HiveMQ Broker
+        client.publish("smartfarm/feedback", feedbackBuffer);
         Serial.printf("   🚀 [MQTT Feedback] Đã publish trạng thái thực tế lên Web: %s\n", feedbackBuffer);
       }
     }
-    
-    // Bản chất lệnh nút bấm là xen ngang, không chặn nhịp nên ta đứng im giữ nguyên máy trạng thái quét cảm biến
+
+    // 🌟 GIẢI CỨU MÁY TRẠNG THÁI: Thoát khỏi bẫy kẹt trạng thái WAIT_RESPONSE sau khi nhận ACK thành công
+    extern volatile bool g_waiting_for_control_ack;
+    g_waiting_for_control_ack = false; // Tắt cờ vì đã nhận được ACK thành công
+
+    if (gw->poll_active) {
+      // Nếu đang trong chu kỳ tuần tra cảm biến dở dang, ép quay lại bước phát lệnh đọc cảm biến 
+      // cho Node hiện tại để bù lại nhịp bị xen ngang, tránh bị tính timeout oan.
+      transition(gw, LORA_GW_STATE_SEND_REQUEST, now_ms);
+    } else {
+      // Nếu trước đó hệ thống đang rảnh (IDLE), trả Gateway về trạng thái nghỉ ngơi thông thường
+      transition(gw, LORA_GW_STATE_IDLE, now_ms);
+    }
+    return; 
+  }
+
+  // 🌟 CHU KỲ TUẦN TRA CẢM BIẾN NGUYÊN BẢN CỦA ĐỒNG NGHIỆP
+  const uint8_t expected_node = current_node_id(gw);
+  if (pkt->src != expected_node) return;
+
+  if (pkt->cmd == CMD_SENSOR_DATA) {
+    if (pkt->seq != gw->current_seq) return; 
+
+    mark_node_online(gw, expected_node, now_ms);
+    if (gw->on_sensor_data != nullptr) {
+      gw->on_sensor_data(expected_node, pkt->payload, pkt->payload_len, rssi);
+    }
+    advance_to_next_node(gw, now_ms);
   }
 }
 
@@ -258,10 +268,28 @@ void lora_gateway_poll(lora_gateway_t* gw) {
       }
     }
     // Bước 3.2: Nếu Anten không nhận được gì, liên tục kiểm tra thời gian đứng đợi tại trạng thái này
-    if (now_ms - gw->state_enter_ms >= gw->config.response_timeout_ms) {
-      handle_timeout(gw, now_ms);
+// 🌟 KHU VỰC VÁ LỖI TIMEOUT CHO NÚT BẤM GUI: Kiểm tra thời gian đứng đợi phản hồi
+if (now_ms - gw->state_enter_ms >= gw->config.response_timeout_ms) {
+  extern volatile bool g_waiting_for_control_ack; // Gọi cờ hiệu từ file main.cpp sang
+  
+  // TRƯỜNG HỢP A: Nếu hết giờ khi đang đợi lệnh NÚT BẤM WEB
+  if (g_waiting_for_control_ack) {
+    g_waiting_for_control_ack = false; // 1. Hạ cờ xuống
+    Serial.println(F("\n[LoRa Gateway] ❌ Timeout! Node dưới vườn không phản hồi gói ACK điều khiển nút bấm."));
+    
+    // 2. Trả máy trạng thái về đúng vị trí cũ trước khi bị nút bấm xen ngang
+    if (gw->poll_active) {
+      transition(gw, LORA_GW_STATE_SEND_REQUEST, now_ms); // Nếu đang quét cảm biến dở thì quay lại quét tiếp
+    } else {
+      transition(gw, LORA_GW_STATE_IDLE, now_ms); // Nếu đang rảnh thì trả về nghỉ ngơi
     }
-    return;
+  } 
+  // TRƯỜNG HỢP B: Nếu hết giờ khi đang quét CẢM BIẾN định kỳ (Không chạm vào nút bấm)
+  else {
+    handle_timeout(gw, now_ms); // Gọi hàm xử lý gốc của đồng nghiệp (Hợp lý 100%)
+  }
+}
+return;
     //Nếu không có sóng, nó liên tục kiểm tra thời gian. Nếu thời gian chờ vượt ngưỡng timeout (now_ms - state_enter_ms >= response_timeout_ms), nó kích hoạt hàm handle_timeout().
   }
   if (gw->state == LORA_GW_STATE_NEXT_NODE) {
