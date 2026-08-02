@@ -19,6 +19,7 @@ extern "C" {
 #define CMD_ACK           0x03
 #define CMD_PING          0x04
 #define CMD_WRITE_CONTROL 0x05  // 🔹 Mã lệnh điều khiển mới từ Gateway gửi xuống Node
+#define CMD_SET_THRESHOLDS 0x06 // Ngưỡng Auto bơm theo độ ẩm đất
 
 #define LORA_MAX_PAYLOAD        32
 #define LORA_PACKET_HEADER_SIZE 5
@@ -42,6 +43,20 @@ typedef struct LORA_PACKED {
   uint8_t roof_pwm;      // 0 - 100
   uint8_t system_mode;   // 0: manual (thủ công), 1: auto (tự động)
 } lora_control_payload_t;
+
+typedef struct LORA_PACKED {
+  uint8_t soil_on;
+  uint8_t soil_off;
+} lora_threshold_payload_t;
+
+/** Pump diagnostic codes — SENSOR_DATA.pump_diagnostic (1 byte on wire) */
+typedef enum {
+  PUMP_DIAG_OK = 0,
+  PUMP_DIAG_DRY_RUN = 1,
+  PUMP_DIAG_OVERLOAD = 2,
+  PUMP_DIAG_WATER_EMPTY = 3
+} pump_diagnostic_t;
+
 typedef struct LORA_PACKED {
   uint8_t dst;
   uint8_t src;
@@ -65,7 +80,7 @@ typedef struct LORA_PACKED {
     uint8_t pump_status;  // 1: ON, 0: OFF
     uint8_t roof_status;  // 1: OPEN, 2: CLOSE, 0: STOP
     // --- 🌟 THÊM BIẾN NÀY ĐỂ KHỚP 100% VỚI STM32 ---
-    uint8_t pump_diagnostic;  // 0: OK, 1: Chạy khô, 2: Quá dòng
+    uint8_t pump_diagnostic;  /* pump_diagnostic_t */
 } __attribute__((packed)) lora_sensor_payload_t;
 // ⚠️ LƯU Ý: Phải có cụm "__attribute__((packed))" để ép các vi điều khiển không tự ý 
 // chèn ô nhớ trống (Padding), giúp STM32 và ESP32 hiểu mạch dữ liệu khít nhau 100%.

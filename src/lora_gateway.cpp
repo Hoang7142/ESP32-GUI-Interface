@@ -118,6 +118,16 @@ static void handle_timeout(lora_gateway_t* gw, uint32_t now_ms) {// hàm xử l�
 /** @brief Validate SENSOR_DATA (src, cmd, seq) and dispatch to callback. */
 /** @brief Validate phản hồi (src, cmd, seq) và điều phối sang hàm xử lý tương ứng */
 /** @brief Validate phản hồi và điều phối sang hàm xử lý tương ứng */
+struct NodeMirrorState {
+  int pumpStatus;
+  int pumpPwm;
+  int roofPwm;
+  String roofStatus;
+  String systemMode;
+};
+extern NodeMirrorState nodeStates[3];
+extern int nodeIndexFromId(uint8_t id);
+
 static void process_response(lora_gateway_t* gw, const lora_packet_t* pkt, int16_t rssi, uint32_t now_ms) {
   
   // 🌟 ƯU TIÊN TOÀN CỤC: Nếu nhận gói ACK phản hồi từ nút bấm, xử lý ngay lập tức
@@ -131,26 +141,29 @@ static void process_response(lora_gateway_t* gw, const lora_packet_t* pkt, int16
       Serial.printf("\n[LoRa Gateway] 🎉 Bắt được gói CMD_ACK xác nhận trạng thái thực tế từ Node 0x%02X!\n", pkt->src);
 
       extern PubSubClient client;
-      extern int fakePumpStatus;
-      extern int fakePumpPwm;
-      extern int fakeRoofPwm;
-      extern String fakeRoofStatus;
-      extern String fakeSystemMode;
+      extern NodeMirrorState nodeStates[3];
+      extern int nodeIndexFromId(uint8_t id);
 
-      fakePumpStatus = state.pump_status;
-      fakePumpPwm    = state.pump_pwm;
-      fakeRoofPwm    = state.roof_pwm;
-      fakeSystemMode = (state.system_mode == 1) ? "auto" : "manual";
-      if (state.roof_status == 1)       fakeRoofStatus = "OPEN";
-      else if (state.roof_status == 2)  fakeRoofStatus = "CLOSE";
-      else                              fakeRoofStatus = "STOP";
+      int ackIdx = nodeIndexFromId(pkt->src);
+      if (ackIdx < 0) return;
+      NodeMirrorState& ns = nodeStates[ackIdx];
 
+      // ✅ Cập nhật fake variables
+      ns.pumpStatus = state.pump_status;
+      ns.pumpPwm    = state.pump_pwm;
+      ns.roofPwm    = state.roof_pwm;
+      ns.systemMode = (state.system_mode == 1) ? "auto" : "manual";
+      if (state.roof_status == 1)       ns.roofStatus = "OPEN";
+      else if (state.roof_status == 2)  ns.roofStatus = "CLOSE";
+      else                              ns.roofStatus = "STOP";
+
+      // ✅ Publish MQTT feedback
       if (client.connected()) {
         JsonDocument feedbackDoc;
         feedbackDoc["node_id"] = pkt->src; 
-        feedbackDoc["pump"]   = fakePumpStatus;
-        feedbackDoc["roof"]   = fakeRoofStatus;
-        feedbackDoc["mode"]   = fakeSystemMode;
+        feedbackDoc["pump"]   = ns.pumpStatus;
+        feedbackDoc["roof"]   = ns.roofStatus;
+        feedbackDoc["mode"]   = ns.systemMode;
         feedbackDoc["status"] = "SUCCESS"; 
 
         char feedbackBuffer[128];
@@ -162,17 +175,13 @@ static void process_response(lora_gateway_t* gw, const lora_packet_t* pkt, int16
     }
 
     // 🌟 GIẢI CỨU MÁY TRẠNG THÁI: Thoát khỏi bẫy kẹt trạng thái WAIT_RESPONSE sau khi nhận ACK thành công
+    // 🔥 FIX: Hạ cờ ACK ngay lập tức
     extern volatile bool g_waiting_for_control_ack;
     g_waiting_for_control_ack = false; // Tắt cờ vì đã nhận được ACK thành công
 
-    if (gw->poll_active) {
-      // Nếu đang trong chu kỳ tuần tra cảm biến dở dang, ép quay lại bước phát lệnh đọc cảm biến 
-      // cho Node hiện tại để bù lại nhịp bị xen ngang, tránh bị tính timeout oan.
-      transition(gw, LORA_GW_STATE_SEND_REQUEST, now_ms);
-    } else {
-      // Nếu trước đó hệ thống đang rảnh (IDLE), trả Gateway về trạng thái nghỉ ngơi thông thường
-      transition(gw, LORA_GW_STATE_IDLE, now_ms);
-    }
+    // 🌟 FIX: Thay vì quay lại SEND_REQUEST ngay, chuyển sang state tạm thời "chờ xử lý"
+    // Điều này đảm bảo ACK data có đủ thời gian được xử lý trước khi quay lại quét cảm biến
+    transition(gw, LORA_GW_STATE_WAIT_ACK_PROCESSED, now_ms);
     return; 
   }
 
@@ -292,6 +301,18 @@ if (now_ms - gw->state_enter_ms >= gw->config.response_timeout_ms) {
 return;
     //Nếu không có sóng, nó liên tục kiểm tra thời gian. Nếu thời gian chờ vượt ngưỡng timeout (now_ms - state_enter_ms >= response_timeout_ms), nó kích hoạt hàm handle_timeout().
   }
+
+    // 🌟 NEW STATE: Chờ ACK được xử lý đầy đủ (tối thiểu 1 vòng loop)
+  if (gw->state == LORA_GW_STATE_WAIT_ACK_PROCESSED) {
+    // Chỉ cần 1 lần lặp để xử lý xong, sau đó quay lại
+    if (gw->poll_active) {
+      transition(gw, LORA_GW_STATE_SEND_REQUEST, now_ms);
+    } else {
+      transition(gw, LORA_GW_STATE_IDLE, now_ms);
+    }
+    return;
+  }
+  
   if (gw->state == LORA_GW_STATE_NEXT_NODE) {
     advance_to_next_node(gw, now_ms);
   }
@@ -309,10 +330,6 @@ const lora_node_status_t* lora_gateway_get_node_status(const lora_gateway_t* gw,
 #ifdef ARDUINO
 lora_gateway_t g_gateway;
     extern PubSubClient client;
-    extern int fakePumpStatus;
-    extern int fakePumpPwm;
-    extern int fakeRoofPwm;
-    extern String fakeSystemMode;
 namespace {
 //lora_gateway_t g_gateway;
 lora_node_status_t g_node_status[LORA_NODE_COUNT];
@@ -341,6 +358,8 @@ int gatewayRadioReceive(uint8_t* data, size_t max_len, int16_t* rssi_out) {
 }
 uint32_t gatewayRadioMillis() { return millis(); }
 //Đây là nơi tác giả "móc" các hàm logic của máy trạng thái vào hàm thực tế của thư viện phần cứng ESP32 (loraSend, loraRxPending, loraReceive, millis()).
+
+
 
 /** @brief Gateway callback: 🌟 TINH TÚY: xử lý giải mã 7 cảm biến thật và truyền MQTT JSON của bạn */
 void onSensorData(uint8_t node_id, const uint8_t* payload, uint8_t payload_len, int16_t rssi) {// hàm xử lý dữ liệu từ các node
@@ -374,9 +393,20 @@ void onSensorData(uint8_t node_id, const uint8_t* payload, uint8_t payload_len, 
     // extern int fakeRoofPwm;
     // extern String fakeSystemMode;
 
+    int idx = nodeIndexFromId(node_id);
+    if (idx < 0) return;
+    NodeMirrorState& ns = nodeStates[idx];
+    ns.systemMode = (sensor.system_mode == 1) ? "auto" : "manual";
+    ns.pumpStatus = sensor.pump_status;
+    if (sensor.roof_status == 1)      ns.roofStatus = "OPEN";
+    else if (sensor.roof_status == 2) ns.roofStatus = "CLOSE";
+    else                              ns.roofStatus = "STOP";
+
+  
     // Đóng gói JSON thực tế đẩy thẳng lên HiveMQ Broker của bạn
     if (client.connected()) {
       JsonDocument doc;
+      doc["node_id"]      = node_id;        // 🆕 THÊM DÒNG NÀY — để backend biết gói này là của node nào
       doc["soil"]        = real_soil;
       doc["temp"]        = real_temp;
       doc["humi"]        = real_humi;
@@ -384,11 +414,14 @@ void onSensorData(uint8_t node_id, const uint8_t* payload, uint8_t payload_len, 
       doc["flow"]        = real_flow;
       doc["current_amp"] = real_amp;
       doc["mua"]         = real_rain;
-      doc["mode"]        = fakeSystemMode;
-      doc["pumpPwm"]     = fakePumpPwm;
-      doc["roofPwm"]     = fakeRoofPwm;
+      doc["mode"]        = ns.systemMode;
+      doc["pumpPwm"]     = ns.pumpPwm;
+      doc["roofPwm"]     = ns.roofPwm;
+      doc["pump"]        = ns.pumpStatus;
+      doc["roof"]        = ns.roofStatus;
+      doc["pumpAlert"] = sensor.pump_diagnostic;
 
-      char mqtt_buffer[256];
+      char mqtt_buffer[256];//320
       serializeJson(doc, mqtt_buffer);//// Chuyển cấu trúc JSON thành một chuỗi văn bản văn bản
       
       client.publish("smartfarm/sensors", mqtt_buffer);//đẩy gói JSON này lên HiveMQ để giao diện Web bắt lấy hiển thị lên biểu đồ.

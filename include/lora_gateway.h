@@ -31,7 +31,12 @@ extern "C" {
  *                 +-----------------+   timeout / retry     |
  *        +------->| WAIT_RESPONSE   |------------------+    |
  *        |        +-----------------+                  |    |
- *        |                | valid SENSOR_DATA           |    |
+ *        |                |                             |    |
+ *        |       (ACK)    v    (SENSOR_DATA)            |    |
+ *        |        +-------------------+                 |    |
+ *        |        | WAIT_ACK_PROCESS  |  🌟 NEW STATE   |    |
+ *        |        +-------------------+                 |    |
+ *        |                |                             |    |
  *        |                v                             |    |
  *        |        +-------------------+                 |    |
  *        |        | PROCESS_RESPONSE  |                 |    |
@@ -102,6 +107,7 @@ typedef enum {
   LORA_GW_STATE_WAIT_RESPONSE,      /**< Waiting for CMD_SENSOR_DATA. */ //Nằm vùng chờ
   LORA_GW_STATE_PROCESS_RESPONSE,   /**< Validating and handling response. */ //Xử lý dữ liệu
   LORA_GW_STATE_NEXT_NODE,          /**< Advance to next node in the list. */ //Chuyển Node
+  LORA_GW_STATE_WAIT_ACK_PROCESSED = 5,  // 🌟 THÊM: Chờ ACK được xử lý
 } lora_gateway_state_t;
 
 /** Gateway context; call lora_gateway_poll() repeatedly from loop/main. */

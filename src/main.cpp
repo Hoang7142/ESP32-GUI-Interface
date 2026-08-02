@@ -4,6 +4,7 @@
 #define ENABLE_WIFI
 #define ENABLE_MQTT
 #define ENABLE_LORA
+#define CONTROL_TEST_DEBUG  1
 
 #if defined(ENABLE_MQTT) && !defined(ENABLE_WIFI)
 #error "ENABLE_MQTT requires ENABLE_WIFI"
@@ -22,6 +23,7 @@
 
 #ifdef ENABLE_WIFI
 #include <WiFi.h>
+#include <WiFiManager.h>
 #endif
 
 #ifdef ENABLE_MQTT
@@ -32,18 +34,13 @@
 
 // Prototypes
 #ifdef ENABLE_WIFI
-void setup_wifi();
+void connectWiFi();   // setup: WiFiManager (portal SmartFarm_SetupWifi)
+void ensureWiFi();    // loop: tự nối lại nếu mất WiFi
 #endif
 
 #ifdef ENABLE_MQTT
 void reconnect();
 void callback(char* topic, byte* payload, unsigned int length);
-#endif
-
-#ifdef ENABLE_WIFI
-// --- Cấu hình mạng WiFi ---
-const char* ssid = "HOANGDIN";
-const char* password = "123456789";
 #endif
 
 #ifdef ENABLE_MQTT
@@ -65,19 +62,39 @@ lora_control_payload_t g_pending_control_data;
 uint8_t g_pending_target_node = 0x11;
 // 🌟 THÊM DÒNG NÀY: Cờ báo hiệu hệ thống đang đứng đợi gói ACK của nút bấm GUI
 volatile bool g_waiting_for_control_ack = false;
+volatile bool g_threshold_cmd_pending = false;
+lora_threshold_payload_t g_pending_threshold_data;
+uint8_t g_pending_threshold_node = 0x11;
 
-// Biến lưu trạng thái đồng bộ thực tế với các thanh trượt PWM và nút bấm Web GUI
-int fakePumpStatus = 0;
-int fakePumpPwm = 100;
-int fakeRoofPwm = 100;
-String fakeRoofStatus = "STOP";
-String fakeSystemMode = "manual";
+// Trạng thái riêng cho từng node: 0=0x11, 1=0x12, 2=0x13
+struct NodeMirrorState {
+  int pumpStatus = 0;
+  int pumpPwm = 100;
+  int roofPwm = 100;
+  String roofStatus = "STOP";
+  String systemMode = "manual";
+};
+
+NodeMirrorState nodeStates[3];
+
+int nodeIndexFromId(uint8_t id) {
+  if (id == 0x11) return 0;
+  if (id == 0x12) return 1;
+  if (id == 0x13) return 2;
+  return -1;
+}
+
+NodeMirrorState* getNodeState(uint8_t id) {
+  int idx = nodeIndexFromId(id);
+  if (idx < 0) return nullptr;
+  return &nodeStates[idx];
+}
 
 void setup() {
   Serial.begin(115200);
 
 #ifdef ENABLE_WIFI
-  setup_wifi();// Gọi hàm kết nối mạng WiFi (Hàm số 2 bên dưới)
+  connectWiFi();  // WiFiManager — khớp lưu đồ Trọng (nông nghiệp)
 #endif
 
 #ifdef ENABLE_MQTT
@@ -103,16 +120,59 @@ void setup() {
 }
 
 #ifdef ENABLE_WIFI
-void setup_wifi() {
-  delay(10);
-  Serial.println("Dang ket noi WiFi...");
-  WiFi.begin(ssid, password);// Cấp tài khoản và mật khẩu để ESP32 bắt đầu dò WiFi
-  // Vòng lặp này sẽ chặn hệ thống (treo máy tạm thời) cho đến khi WiFi kết nối thành công
-  while (WiFi.status() != WL_CONNECTED) {
+/**
+ * connectWiFi() — theo lưu đồ:
+ * - Đã lưu WiFi trước → tự nối
+ * - Thất bại → mở portal "SmartFarm_SetupWifi", timeout 120s → restart ESP
+ */
+void connectWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFiManager wm;
+
+  // Timeout portal 120 giây (như lưu đồ Trọng)
+  wm.setConfigPortalTimeout(120);
+  wm.setConnectTimeout(30);
+
+  Serial.println("WiFiManager: dang ket noi / mo portal SmartFarm_SetupWifi ...");
+  bool ok = wm.autoConnect("SmartFarm_SetupWifi");
+
+  if (!ok) {
+    Serial.println("WiFiManager that bai / timeout 120s -> restart ESP32");
+    delay(1500);
+    ESP.restart();
+  }
+
+  Serial.println("WiFi Connected!");
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+/**
+ * ensureWiFi() — trong loop: mất WiFi thì reconnect bằng credential đã lưu.
+ * Vẫn fail sau ~15s → restart để chạy lại WiFiManager (portal nếu cần).
+ */
+void ensureWiFi() {
+  if (WiFi.status() == WL_CONNECTED) {
+    return;
+  }
+
+  Serial.println("WiFi mat ket noi -> ensureWiFi() reconnect...");
+  WiFi.reconnect();
+
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && (millis() - t0) < 15000UL) {
     delay(500);
     Serial.print(".");
   }
-  Serial.println("\nWiFi Connected!");
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWiFi reconnect OK");
+    return;
+  }
+
+  Serial.println("\nensureWiFi that bai -> restart ESP (mo lai WiFiManager)");
+  delay(1000);
+  ESP.restart();
 }
 #endif
 #ifdef ENABLE_MQTT
@@ -124,32 +184,68 @@ void callback(char* topic, byte* payload, unsigned int length) {
   // 1. Dùng thư viện ArduinoJson để giải mã mảng Byte thô thành một cây thư mục dữ liệu JSON
   JsonDocument doc;
   deserializeJson(doc, payload, length);
+  uint8_t target_node = (uint8_t)doc["node_id"].as<int>();
+if (target_node == 0) {
+  target_node = 0x11;  // fallback nếu MQTT thiếu node_id
+}
+if (target_node != 0x11 && target_node != 0x12 && target_node != 0x13) {
+    Serial.printf(" [Cảnh báo] Node ID 0x%02X không thuộc hệ thống!\n", target_node);
+    return;
+}
+
+NodeMirrorState* ns = getNodeState(target_node);
+if (!ns) return;
 
   JsonDocument feedbackDoc;
 
   // 2. PHÂN PHỐI LỆNH: Kiểm tra xem Web đang muốn điều khiển thiết bị nào (device)
-  if (doc["device"] == "pump") {
-    fakePumpStatus = doc["state"];
-    feedbackDoc["pump"] = fakePumpStatus;
-    Serial.println(fakePumpStatus == 1 ? "-> BOM: BAT" : "-> BOM: TAT");
-  }
+if (doc["device"] == "pump") {
+    // FIX BUG #8: chỉ nhận lệnh bơm khi đang MANUAL
+    if (ns->systemMode == "manual") {
+        ns->pumpStatus = doc["state"];
+        feedbackDoc["pump"] = ns->pumpStatus;
+        Serial.println(ns->pumpStatus == 1 ? "-> BOM: BAT" : "-> BOM: TAT");
+    } else {
+        Serial.println("-> [Từ chối] Lệnh BOM bị bỏ qua vì đang ở chế độ AUTO");
+    }
+}
   else if (doc["device"] == "pump_pwm") {
-    fakePumpPwm = doc["val"];// Cập nhật tốc độ bơm từ thanh trượt (0 - 100%)
-    Serial.printf("-> PWM BOM: %d%%\n", fakePumpPwm);
+    	
+    ns->pumpPwm = doc["val"];// Cập nhật tốc độ bơm từ thanh trượt (0 - 100%)
+        Serial.printf("-> PWM BOM: %d%%\n", 	
+          ns->pumpPwm);
   }
   else if (doc["device"] == "roof") {
-    String action = doc["action"].as<String>();// Đọc chuỗi hành động mái che: "OPEN", "CLOSE", "STOP"
-    fakeRoofStatus = action;
-    feedbackDoc["roof"] = fakeRoofStatus;
-    Serial.println("-> MAI CHE: " + fakeRoofStatus);
-  }
+    // FIX (giống Bug #8): chỉ nhận lệnh mái che khi đang MANUAL
+    if (ns->systemMode == "manual") {
+        String action = doc["action"].as<String>();// Đọc chuỗi hành động mái che: "OPEN", "CLOSE", "STOP"
+        ns->roofStatus = action;
+        feedbackDoc["roof"] = ns->roofStatus;
+        Serial.println("-> MAI CHE: " + ns->roofStatus);
+    } else {
+        Serial.println("-> [Từ chối] Lệnh MAI CHE bị bỏ qua vì đang ở chế độ AUTO");
+    }
+}
   else if (doc["device"] == "roof_pwm") {
-    fakeRoofPwm = doc["val"];// Cập nhật tốc độ mở mái che (0 - 100%)
-    Serial.printf("-> PWM MAI CHE: %d%%\n", fakeRoofPwm);
+    ns->roofPwm = doc["val"];// Cập nhật tốc độ mở mái che (0 - 100%)
+    Serial.printf("-> PWM MAI CHE: %d%%\n", ns->roofPwm);
   }
   else if (doc["device"] == "system") {
-    fakeSystemMode = doc["mode"].as<String>();
-    Serial.println("-> CHE DO: " + fakeSystemMode);
+    ns->systemMode = doc["mode"].as<String>();
+    Serial.println("-> CHE DO: " + ns->systemMode);
+  }
+  else if (doc["device"] == "auto_threshold") {
+    uint8_t soilOn = (uint8_t)doc["soil_on"].as<int>();
+    uint8_t soilOff = (uint8_t)doc["soil_off"].as<int>();
+    if (soilOn < soilOff) {
+      g_pending_threshold_data.soil_on = soilOn;
+      g_pending_threshold_data.soil_off = soilOff;
+      g_pending_threshold_node = target_node;
+      g_threshold_cmd_pending = true;
+      Serial.printf("-> NGUONG AUTO: bat<%u%% tat>%u%% (Node 0x%02X)\n",
+                    soilOn, soilOff, target_node);
+    }
+    return;
   }
 
   // 🔹 TẮT ĐOẠN PHÁT MQTT TẠM THỜI Ở ĐÂY ĐỂ CHỐNG NHÁY WEB (THEO ĐÚNG CHỈ DẪN)
@@ -160,24 +256,17 @@ void callback(char* topic, byte* payload, unsigned int length) {
   // }
 
 #ifdef ENABLE_LORA
-  // BÓC TÁCH NODE_ID ĐỘNG TỪ WEB (Hỗ trợ điều khiển chính xác Node 0x11, 0x12, 0x13)
-  uint8_t target_node = doc["node_id"] | 0x11;
-  if (target_node != 0x11 && target_node != 0x12 && target_node != 0x13) {
-    Serial.printf(" [Cảnh báo] Node ID 0x%02X không thuộc hệ thống!\n", target_node);
-    return;
-  }
-
   // ĐÓNG GÓI LỆNH ĐIỀU KHIỂN NÚT NHẤN VÀO HÀNG ĐỢI (CHỜ LUỒNG LOOP PHÁT AN TOÀN)
-  g_pending_control_data.pump_status = (fakePumpStatus == 1) ? 1 : 0;
-  g_pending_control_data.pump_pwm    = (uint8_t)fakePumpPwm;
+  g_pending_control_data.pump_status = (ns->pumpStatus == 1) ? 1 : 0;
+  g_pending_control_data.pump_pwm    = (uint8_t)ns->pumpPwm;
 
   // Chuyển đổi trạng thái chữ của Mái che thành số nguyên (0, 1, 2) cho nhẹ băng thông LoRa
-  if (fakeRoofStatus == "OPEN")       g_pending_control_data.roof_status = 1;
-  else if (fakeRoofStatus == "CLOSE") g_pending_control_data.roof_status = 2;
+  if (ns->roofStatus == "OPEN")       g_pending_control_data.roof_status = 1;
+  else if (ns->roofStatus == "CLOSE") g_pending_control_data.roof_status = 2;
   else                                g_pending_control_data.roof_status = 0; 
-  g_pending_control_data.roof_pwm    = (uint8_t)fakeRoofPwm;
+  g_pending_control_data.roof_pwm    = (uint8_t)ns->roofPwm;
 
-  g_pending_control_data.system_mode = (fakeSystemMode == "auto") ? 1 : 0;// Tự động = 1, Thủ công = 0
+  g_pending_control_data.system_mode = (ns->systemMode == "auto") ? 1 : 0;// Tự động = 1, Thủ công = 0
   
   g_pending_target_node = target_node;// Ghi nhận ID đích cần điều khiển
   g_mqtt_cmd_pending = true;// PHẤT CỜ HIỆU! Báo cho hàm loop biết có bưu phẩm khẩn cấp cần phát
@@ -188,6 +277,10 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
 void reconnect() {
   while (!client.connected()) {
+#ifdef ENABLE_WIFI
+    // MQTT chỉ nối được khi WiFi còn sống
+    ensureWiFi();
+#endif
     Serial.println("Dang ket noi MQTT...");
     if (client.connect("ESP32_Gateway", mqtt_user, mqtt_pass)) {
       Serial.println("MQTT Connected!");
@@ -202,6 +295,10 @@ void reconnect() {
 #endif
 
 void loop() {
+#ifdef ENABLE_WIFI
+  ensureWiFi();
+#endif
+
 #ifdef ENABLE_MQTT
   if (!client.connected()) {
     reconnect();
@@ -235,6 +332,15 @@ void loop() {
         Serial.printf(" 📬 [Nút Bấm GUI] Đang phát sóng LoRa lệnh ĐIỀU KHIỂN xuống Node 0x%02X (Ctrl Seq: %u)...\n", 
                       g_pending_target_node, tx_packet.seq);
         loraSend(wire_buffer, wire_len); // PHÓNG SÓNG LORA!
+        #if CONTROL_TEST_DEBUG
+        Serial.printf(" [CTRL-TX] -> Node 0x%02X | pump=%u pwm=%u roof=%u roof_pwm=%u mode=%s\n",
+          g_pending_target_node,
+          g_pending_control_data.pump_status,
+          g_pending_control_data.pump_pwm,
+          g_pending_control_data.roof_status,
+          g_pending_control_data.roof_pwm,
+          g_pending_control_data.system_mode ? "auto" : "manual");
+          #endif
         
         // 🔥 VÁ LỖI TRẠNG THÁI VÀ BẬT CỜ ĐỢI ACK ĐIỀU KHIỂN
         extern lora_gateway_t g_gateway;
@@ -245,6 +351,28 @@ void loop() {
         g_waiting_for_control_ack = true;    // Kích hoạt cờ: "Tôi đang đợi ACK nút bấm"
         
         Serial.println("   🔄 [Hệ Thống] Đã sửa lỗi Anten Điếc & Chuyển Gateway sang trạng thái đợi phản hồi ACK!");
+      }
+    }
+  }
+
+  if (g_threshold_cmd_pending) {
+    g_threshold_cmd_pending = false;
+    lora_packet_t tx_packet;
+    static uint8_t threshold_seq = 0;
+    threshold_seq++;
+
+    if (lora_packet_build(&tx_packet, g_pending_threshold_node, LORA_GATEWAY_ID,
+                          CMD_SET_THRESHOLDS, threshold_seq,
+                          (const uint8_t*)&g_pending_threshold_data,
+                          sizeof(g_pending_threshold_data))) {
+      uint8_t wire_buffer[LORA_PACKET_MAX_SIZE];
+      size_t wire_len = lora_packet_encode(&tx_packet, wire_buffer, sizeof(wire_buffer));
+      if (wire_len > 0) {
+        Serial.printf(" [THRESHOLD-TX] -> Node 0x%02X ON<%u OFF>%u\n",
+                      g_pending_threshold_node,
+                      g_pending_threshold_data.soil_on,
+                      g_pending_threshold_data.soil_off);
+        loraSend(wire_buffer, wire_len);
       }
     }
   }
