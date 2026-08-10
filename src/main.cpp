@@ -70,7 +70,7 @@ uint8_t g_pending_threshold_node = 0x11;
 struct NodeMirrorState {
   int pumpStatus = 0;
   int pumpPwm = 100;
-  int roofPwm = 100;
+  int roofPwm = 15;
   String roofStatus = "STOP";
   String systemMode = "manual";
 };
@@ -237,13 +237,18 @@ if (doc["device"] == "pump") {
   else if (doc["device"] == "auto_threshold") {
     uint8_t soilOn = (uint8_t)doc["soil_on"].as<int>();
     uint8_t soilOff = (uint8_t)doc["soil_off"].as<int>();
+    int coolRaw = doc["cooldown_sec"] | 15;
+    if (coolRaw < 0) coolRaw = 0;
+    if (coolRaw > 60) coolRaw = 60;
+    uint8_t coolSec = (uint8_t)coolRaw;
     if (soilOn < soilOff) {
       g_pending_threshold_data.soil_on = soilOn;
       g_pending_threshold_data.soil_off = soilOff;
+      g_pending_threshold_data.cooldown_sec = coolSec;
       g_pending_threshold_node = target_node;
       g_threshold_cmd_pending = true;
-      Serial.printf("-> NGUONG AUTO: bat<%u%% tat>%u%% (Node 0x%02X)\n",
-                    soilOn, soilOff, target_node);
+      Serial.printf("-> NGUONG AUTO: bat<%u%% tat>%u%% cool=%us (Node 0x%02X)\n",
+                    soilOn, soilOff, coolSec, target_node);
     }
     return;
   }
@@ -368,10 +373,11 @@ void loop() {
       uint8_t wire_buffer[LORA_PACKET_MAX_SIZE];
       size_t wire_len = lora_packet_encode(&tx_packet, wire_buffer, sizeof(wire_buffer));
       if (wire_len > 0) {
-        Serial.printf(" [THRESHOLD-TX] -> Node 0x%02X ON<%u OFF>%u\n",
+        Serial.printf(" [THRESHOLD-TX] -> Node 0x%02X ON<%u OFF>%u cool=%us\n",
                       g_pending_threshold_node,
                       g_pending_threshold_data.soil_on,
-                      g_pending_threshold_data.soil_off);
+                      g_pending_threshold_data.soil_off,
+                      g_pending_threshold_data.cooldown_sec);
         loraSend(wire_buffer, wire_len);
       }
     }

@@ -118,6 +118,7 @@ static void handle_timeout(lora_gateway_t* gw, uint32_t now_ms) {// hàm xử l�
 /** @brief Validate SENSOR_DATA (src, cmd, seq) and dispatch to callback. */
 /** @brief Validate phản hồi (src, cmd, seq) và điều phối sang hàm xử lý tương ứng */
 /** @brief Validate phản hồi và điều phối sang hàm xử lý tương ứng */
+
 struct NodeMirrorState {
   int pumpStatus;
   int pumpPwm;
@@ -401,6 +402,9 @@ void onSensorData(uint8_t node_id, const uint8_t* payload, uint8_t payload_len, 
     if (sensor.roof_status == 1)      ns.roofStatus = "OPEN";
     else if (sensor.roof_status == 2) ns.roofStatus = "CLOSE";
     else                              ns.roofStatus = "STOP";
+    /* PWM tu node (LCD / lenh Web da ap) — dong bo slider GUI */
+    ns.pumpPwm = sensor.pump_pwm;
+    ns.roofPwm = sensor.roof_pwm;
 
   
     // Đóng gói JSON thực tế đẩy thẳng lên HiveMQ Broker của bạn
