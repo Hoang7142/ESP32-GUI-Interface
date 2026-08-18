@@ -70,7 +70,7 @@ uint8_t g_pending_threshold_node = 0x11;
 struct NodeMirrorState {
   int pumpStatus = 0;
   int pumpPwm = 100;
-  int roofPwm = 15;
+  int roofPwm = 20;
   String roofStatus = "STOP";
   String systemMode = "manual";
 };
@@ -197,44 +197,54 @@ NodeMirrorState* ns = getNodeState(target_node);
 if (!ns) return;
 
   JsonDocument feedbackDoc;
+  String device = doc["device"] | "";
+  bool queue_lora = false;
+  bool touch_roof = false;
 
   // 2. PHÂN PHỐI LỆNH: Kiểm tra xem Web đang muốn điều khiển thiết bị nào (device)
-if (doc["device"] == "pump") {
+if (device == "pump") {
     // FIX BUG #8: chỉ nhận lệnh bơm khi đang MANUAL
     if (ns->systemMode == "manual") {
         ns->pumpStatus = doc["state"];
         feedbackDoc["pump"] = ns->pumpStatus;
         Serial.println(ns->pumpStatus == 1 ? "-> BOM: BAT" : "-> BOM: TAT");
+        queue_lora = true;
     } else {
         Serial.println("-> [Từ chối] Lệnh BOM bị bỏ qua vì đang ở chế độ AUTO");
     }
 }
-  else if (doc["device"] == "pump_pwm") {
+  else if (device == "pump_pwm") {
     	
     ns->pumpPwm = doc["val"];// Cập nhật tốc độ bơm từ thanh trượt (0 - 100%)
         Serial.printf("-> PWM BOM: %d%%\n", 	
           ns->pumpPwm);
+        queue_lora = true;
   }
-  else if (doc["device"] == "roof") {
+  else if (device == "roof") {
     // FIX (giống Bug #8): chỉ nhận lệnh mái che khi đang MANUAL
     if (ns->systemMode == "manual") {
         String action = doc["action"].as<String>();// Đọc chuỗi hành động mái che: "OPEN", "CLOSE", "STOP"
         ns->roofStatus = action;
         feedbackDoc["roof"] = ns->roofStatus;
         Serial.println("-> MAI CHE: " + ns->roofStatus);
+        queue_lora = true;
+        touch_roof = true;
     } else {
         Serial.println("-> [Từ chối] Lệnh MAI CHE bị bỏ qua vì đang ở chế độ AUTO");
     }
 }
-  else if (doc["device"] == "roof_pwm") {
+  else if (device == "roof_pwm") {
     ns->roofPwm = doc["val"];// Cập nhật tốc độ mở mái che (0 - 100%)
     Serial.printf("-> PWM MAI CHE: %d%%\n", ns->roofPwm);
+    queue_lora = true;
+    touch_roof = true;
   }
-  else if (doc["device"] == "system") {
+  else if (device == "system") {
     ns->systemMode = doc["mode"].as<String>();
     Serial.println("-> CHE DO: " + ns->systemMode);
+    queue_lora = true;
   }
-  else if (doc["device"] == "auto_threshold") {
+  else if (device == "auto_threshold") {
     uint8_t soilOn = (uint8_t)doc["soil_on"].as<int>();
     uint8_t soilOff = (uint8_t)doc["soil_off"].as<int>();
     int coolRaw = doc["cooldown_sec"] | 15;
@@ -261,14 +271,25 @@ if (doc["device"] == "pump") {
   // }
 
 #ifdef ENABLE_LORA
+  if (!queue_lora) {
+    return;
+  }
   // ĐÓNG GÓI LỆNH ĐIỀU KHIỂN NÚT NHẤN VÀO HÀNG ĐỢI (CHỜ LUỒNG LOOP PHÁT AN TOÀN)
   g_pending_control_data.pump_status = (ns->pumpStatus == 1) ? 1 : 0;
   g_pending_control_data.pump_pwm    = (uint8_t)ns->pumpPwm;
 
-  // Chuyển đổi trạng thái chữ của Mái che thành số nguyên (0, 1, 2) cho nhẹ băng thông LoRa
-  if (ns->roofStatus == "OPEN")       g_pending_control_data.roof_status = 1;
-  else if (ns->roofStatus == "CLOSE") g_pending_control_data.roof_status = 2;
-  else                                g_pending_control_data.roof_status = 0; 
+  /*
+   * Chi gui OPEN/CLOSE/STOP mai khi lenh dung la roof / roof_pwm.
+   * Lenh bom/mode: roof_status=0xFF = "khong doi mai" (STM bo qua),
+   * tranh keo lai OPEN cu va tranh xoa latch CTHT.
+   */
+  if (touch_roof) {
+    if (ns->roofStatus == "OPEN")       g_pending_control_data.roof_status = 1;
+    else if (ns->roofStatus == "CLOSE") g_pending_control_data.roof_status = 2;
+    else                                g_pending_control_data.roof_status = 0;
+  } else {
+    g_pending_control_data.roof_status = 0xFFu; /* no-change */
+  }
   g_pending_control_data.roof_pwm    = (uint8_t)ns->roofPwm;
 
   g_pending_control_data.system_mode = (ns->systemMode == "auto") ? 1 : 0;// Tự động = 1, Thủ công = 0
@@ -276,7 +297,9 @@ if (doc["device"] == "pump") {
   g_pending_target_node = target_node;// Ghi nhận ID đích cần điều khiển
   g_mqtt_cmd_pending = true;// PHẤT CỜ HIỆU! Báo cho hàm loop biết có bưu phẩm khẩn cấp cần phát
   
-  Serial.printf(" [Hàng đợi] Đã xếp hàng lệnh cho Node 0x%02X. Chờ luồng Loop rảnh để phát...\n", target_node);
+  Serial.printf(" [Hang doi] Node 0x%02X roof_touch=%d roof=%u\n",
+                target_node, touch_roof ? 1 : 0,
+                (unsigned)g_pending_control_data.roof_status);
 #endif
 }
 
